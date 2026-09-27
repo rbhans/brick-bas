@@ -25,6 +25,10 @@ environment/defaults/default_clear_color=Color(0.035, 0.045, 0.055, 1)
 3d_physics/layer_2="Minifigure"
 3d_physics/layer_3="Camera-only covers"
 
+[editor]
+
+movie_writer/mjpeg_quality=0.95
+
 [input]
 move_forward={"deadzone":0.3,"events":[Object(InputEventKey,"physical_keycode":87)]}
 move_back={"deadzone":0.3,"events":[Object(InputEventKey,"physical_keycode":83)]}
