@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#263239">
+  <meta name="description" content="Build brick buildings, assemble their HVAC systems, and walk inside. Your saves stay in your browser.">
+  <title>BRICK / BAS</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #263239; color: #eee8d4; font-family: system-ui, sans-serif; }
+    #canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+    #loading { position: fixed; inset: 0; display: grid; place-items: center; background: #263239; }
+    #loading section { width: min(440px, 90vw); text-align: center; }
+    h1 { color: #ffcf45; font-size: 36px; letter-spacing: -.04em; }
+    p { line-height: 1.5; }
+    progress { width: 100%; accent-color: #ffcf45; height: 10px; }
+    #notice { position: fixed; left: 16px; right: 16px; bottom: 18px; z-index: 2; padding: 12px 18px; border-radius: 10px; background: #683b2e; }
+    [hidden] { display: none !important; }
+  </style>
+  $GODOT_HEAD_INCLUDE
+</head>
+<body>
+  <canvas id="canvas" tabindex="0" aria-label="Brick BAS game. Keyboard and mouse required.">This game requires WebGL 2 and JavaScript.</canvas>
+  <div id="loading" role="status"><section><h1>BRICK / BAS</h1><p id="load-label">Unpacking the pieces…</p><progress id="progress"></progress><p>Build a space. Assemble its systems. Walk inside.</p><small>Desktop keyboard + mouse · Saves stay in this browser</small></section></div>
+  <div id="notice" role="alert" hidden></div>
+  <input id="save-file" type="file" accept=".json,application/json" hidden>
+  <noscript>Enable JavaScript to play.</noscript>
+  <script src="$GODOT_URL"></script>
+  <script>
+    'use strict';
+    const canvas = document.getElementById('canvas');
+    const notice = document.getElementById('notice');
+    const picker = document.getElementById('save-file');
+    let importCallback = null;
+    window.BrickBasFiles = {
+      choose(callback) {
+        importCallback = callback;
+        picker.value = '';
+        picker.click();
+      },
+      warn(message) { notice.textContent = message; notice.hidden = !message; },
+      requestPersistence() { navigator.storage?.persist?.().catch(() => {}); },
+      credits() { window.open('ASSET_CREDITS.md', '_blank', 'noopener,noreferrer'); }
+    };
+    picker.addEventListener('change', async () => {
+      const callback = importCallback;
+      importCallback = null;
+      const file = picker.files[0];
+      if (!file || !callback) return;
+      try {
+        if (file.size > 8 * 1024 * 1024) throw new Error('This backup is too large (8 MB maximum).');
+        callback(await file.text(), '');
+      } catch (error) { callback('', error.message); }
+      canvas.focus();
+    });
+    canvas.addEventListener('contextmenu', event => event.preventDefault());
+    // Phones and tablets: it loads, but say up front that building wants a mouse.
+    if (matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches) {
+      window.BrickBasFiles.warn('BRICK / BAS is made for a computer with a mouse and keyboard. It will load here, but building needs a mouse. Tap to hide this note.');
+      notice.addEventListener('click', () => { notice.hidden = true; }, { once: true });
+    }
+    const config = $GODOT_CONFIG;
+    // Deep links: ?starter=school&mode=explore&graphics=low (whitelisted).
+    const query = new URLSearchParams(location.search);
+    const linked = [];
+    const starter = query.get('starter');
+    if (['studio', 'office', 'school', 'blank'].includes(starter)) linked.push('--template=' + starter);
+    if (query.get('mode') === 'equipment') linked.push('--equipment');
+    if (query.get('mode') === 'explore') linked.push('--explore');
+    if (['auto', 'high', 'low'].includes(query.get('graphics'))) linked.push('--graphics=' + query.get('graphics'));
+    if (linked.length) config.args = (config.args || []).concat(['--'], linked);
+    const missing = Engine.getMissingFeatures({ threads: $GODOT_THREADS_ENABLED });
+    const progress = document.getElementById('progress');
+    const label = document.getElementById('load-label');
+    function fail(error) {
+      label.textContent = 'Unable to start: ' + (error.message || error);
+      progress.hidden = true;
+      console.error(error);
+    }
+    if (missing.length) fail('This browser needs ' + missing.join(', '));
+    else {
+      const engine = new Engine(config);
+      engine.startGame({
+        canvas,
+        onProgress(current, total) {
+          if (total > 0) { progress.max = total; progress.value = current; }
+        }
+      }).then(() => { document.getElementById('loading').remove(); canvas.focus(); }).catch(fail);
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,265 @@
+{
+  "ok": true,
+  "assets": [
+    {
+      "path": "assets/ui/thumbnails/ahu.png",
+      "format": "PNG",
+      "mode": "RGBA",
+      "width": 256,
+      "height": 224,
+      "bytes": 11946,
+      "color_count": 1107,
+      "has_alpha": true,
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "transparent_pixels": 33880,
+      "content_bounds": [
+        9,
+        54,
+        252,
+        179
+      ],
+      "problems": []
+    },
+    {
+      "path": "assets/ui/thumbnails/cooling_coil.png",
+      "format": "PNG",
+      "mode": "RGBA",
+      "width": 256,
+      "height": 224,
+      "bytes": 3804,
+      "color_count": 174,
+      "has_alpha": true,
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "transparent_pixels": 30492,
+      "content_bounds": [
+        61,
+        14,
+        205,
+        213
+      ],
+      "problems": []
+    },
+    {
+      "path": "assets/ui/thumbnails/damper.png",
+      "format": "PNG",
+      "mode": "RGBA",
+      "width": 256,
+      "height": 224,
+      "bytes": 4148,
+      "color_count": 179,
+      "has_alpha": true,
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "transparent_pixels": 16896,
+      "content_bounds": [
+        20,
+        11,
+        239,
+        206
+      ],
+      "problems": []
+    },
+    {
+      "path": "assets/ui/thumbnails/door.png",
+      "format": "PNG",
+      "mode": "RGBA",
+      "width": 256,
+      "height": 224,
+      "bytes": 3785,
+      "color_count": 258,
+      "has_alpha": true,
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "transparent_pixels": 35448,
+      "content_bounds": [
+        73,
+        11,
+        184,
+        214
+      ],
+      "problems": []
+    },
+    {
+      "path": "assets/ui/thumbnails/duct.png",
+      "format": "PNG",
+      "mode": "RGBA",
+      "width": 256,
+      "height": 224,
+      "bytes": 2814,
+      "color_count": 115,
+      "has_alpha": true,
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "transparent_pixels": 37212,
+      "content_bounds": [
+        5,
+        61,
+        251,
+        163
+      ],
+      "problems": []
+    },
+    {
+      "path": "assets/ui/thumbnails/fan.png",
+      "format": "PNG",
+      "mode": "RGBA",
+      "width": 256,
+      "height": 224,
+      "bytes": 7867,
+      "color_count": 426,
+      "has_alpha": true,
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "transparent_pixels": 31497,
+      "content_bounds": [
+        62,
+        15,
+        209,
+        198
+      ],
+      "problems": []
+    },
+    {
+      "path": "assets/ui/thumbnails/filter.png",
+      "format": "PNG",
+      "mode": "RGBA",
+      "width": 256,
+      "height": 224,
+      "bytes": 3285,
+      "color_count": 143,
+      "has_alpha": true,
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "transparent_pixels": 30492,
+      "content_bounds": [
+        61,
+        14,
+        205,
+        213
+      ],
+      "problems": []
+    },
+    {
+      "path": "assets/ui/thumbnails/floor.png",
+      "format": "PNG",
+      "mode": "RGBA",
+      "width": 256,
+      "height": 224,
+      "bytes": 5624,
+      "color_count": 151,
+      "has_alpha": true,
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "transparent_pixels": 45589,
+      "content_bounds": [
+        14,
+        79,
+        242,
+        148
+      ],
+      "problems": []
+    },
+    {
+      "path": "assets/ui/thumbnails/heating_coil.png",
+      "format": "PNG",
+      "mode": "RGBA",
+      "width": 256,
+      "height": 224,
+      "bytes": 3529,
+      "color_count": 155,
+      "has_alpha": true,
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "transparent_pixels": 30492,
+      "content_bounds": [
+        61,
+        14,
+        205,
+        213
+      ],
+      "problems": []
+    },
+    {
+      "path": "assets/ui/thumbnails/sensor.png",
+      "format": "PNG",
+      "mode": "RGBA",
+      "width": 256,
+      "height": 224,
+      "bytes": 4856,
+      "color_count": 201,
+      "has_alpha": true,
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "transparent_pixels": 37864,
+      "content_bounds": [
+        19,
+        54,
+        237,
+        186
+      ],
+      "problems": []
+    },
+    {
+      "path": "assets/ui/thumbnails/vav.png",
+      "format": "PNG",
+      "mode": "RGBA",
+      "width": 256,
+      "height": 224,
+      "bytes": 11112,
+      "color_count": 791,
+      "has_alpha": true,
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "transparent_pixels": 21489,
+      "content_bounds": [
+        6,
+        26,
+        252,
+        211
+      ],
+      "problems": []
+    },
+    {
+      "path": "assets/ui/thumbnails/wall.png",
+      "format": "PNG",
+      "mode": "RGBA",
+      "width": 256,
+      "height": 224,
+      "bytes": 2262,
+      "color_count": 68,
+      "has_alpha": true,
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "transparent_pixels": 35195,
+      "content_bounds": [
+        72,
+        11,
+        184,
+        215
+      ],
+      "problems": []
+    },
+    {
+      "path": "assets/ui/thumbnails/window.png",
+      "format": "PNG",
+      "mode": "RGBA",
+      "width": 256,
+      "height": 224,
+      "bytes": 3965,
+      "color_count": 271,
+      "has_alpha": true,
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "transparent_pixels": 36004,
+      "content_bounds": [
+        73,
+        12,
+        187,
+        215
+      ],
+      "problems": []
+    }
+  ]
+}

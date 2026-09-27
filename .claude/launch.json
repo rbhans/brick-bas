@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "brick-bas-web",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/serve_web.mjs"],
+      "port": 8060
+    }
+  ]
+}

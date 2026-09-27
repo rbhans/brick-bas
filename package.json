@@ -1,0 +1,20 @@
+{
+  "name": "brick-bas-connection-bridge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bridge": "node scripts/baskstream-bridge.mjs",
+    "web:build": "node tools/export_web.mjs",
+    "web:serve": "node tools/serve_web.mjs",
+    "site:bundle": "node tools/package_site.mjs",
+    "test:worker": "node --test deploy/worker.test.mjs",
+    "deploy": "npm run web:build && npm run site:bundle && npm run test:worker && wrangler deploy"
+  },
+  "dependencies": {
+    "@msgpack/msgpack": "3.1.3",
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "wrangler": "^4.92.0"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "engine": "Godot 4.7",
+  "world_scale": "0.025 meters per LDraw unit",
+  "family": "brick-built HVAC",
+  "assets": [
+    {"id": "ahu-damper-bank", "pieces": "3 vanes, shaft hub, actuator", "motion": "static in first playable", "status": "engine-verified candidate"},
+    {"id": "ahu-filter-bank", "pieces": "6 grille bricks, 2 frame rails", "motion": "none", "status": "engine-verified candidate"},
+    {"id": "ahu-coil-bank", "pieces": "6 grille bricks, 2 headers, 3 fill rows", "motion": "bottom-up row fill", "status": "engine-verified candidate"},
+    {"id": "ahu-fan", "pieces": "official 40598a venting-disc/fan element, round hub, 2x2 motor block", "motion": "feedback-driven rotation", "status": "engine-verified candidate"},
+    {"id": "ahu-sensor", "pieces": "base plate, enclosure brick, round face", "motion": "none", "status": "engine-verified candidate"},
+    {"id": "vav-box", "pieces": "open housing, 2 collars, damper and shaft, actuator, 3-piece reheat bank", "motion": "feedback-driven damper", "status": "requires native-fit rebuild"}
+  ],
+  "source_manifest": "third_party/ldraw/selection.json",
+  "license_record": "../ASSET_CREDITS.md"
+}

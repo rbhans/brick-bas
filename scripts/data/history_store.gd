@@ -1,0 +1,65 @@
+class_name HistoryStore
+extends RefCounted
+
+# Trend history for every numeric point, kept in packed arrays so a whole
+# building (1000+ points) can hold a simulated day cheaply. Boundaries (reset,
+# data-source change) are stored as NaN so trends break instead of joining
+# unrelated data.
+
+const SAMPLE_INTERVAL_S := 60.0
+const MAX_SAMPLES_PER_POINT := 1440
+
+var times: Dictionary = {}   # point id -> PackedFloat32Array
+var values: Dictionary = {}  # point id -> PackedFloat32Array
+var last_sample_time := -INF
+
+func sample(points: Array[Dictionary], sim_time: float) -> bool:
+	if sim_time - last_sample_time < SAMPLE_INTERVAL_S:
+		return false
+	last_sample_time = sim_time
+	for point in points:
+		var id := String(point.get("point_id", ""))
+		var value: Variant = point.get("value")
+		if id.is_empty():
+			continue
+		var number := NAN
+		if value is bool: number = 1.0 if value else 0.0
+		elif value is int or value is float: number = float(value)
+		else: continue
+		if not times.has(id):
+			times[id] = PackedFloat32Array()
+			values[id] = PackedFloat32Array()
+		_push(id, sim_time, number)
+	return true
+
+func _push(id: String, time: float, value: float) -> void:
+	# Appending through the dictionary mutates in place (no copy-on-write).
+	times[id].append(time)
+	values[id].append(value)
+	if times[id].size() > MAX_SAMPLES_PER_POINT + 120:
+		times[id] = times[id].slice(-MAX_SAMPLES_PER_POINT)
+		values[id] = values[id].slice(-MAX_SAMPLES_PER_POINT)
+
+func mark_boundary(_reason: String, sim_time: float) -> void:
+	last_sample_time = -INF
+	for id in times:
+		_push(String(id), sim_time, NAN)
+
+func clear() -> void:
+	times.clear()
+	values.clear()
+	last_sample_time = -INF
+
+# [{time, value, boundary}] oldest first; `since` limits the window.
+func get_series(point_id: String, since: float = -INF) -> Array:
+	var result: Array = []
+	if not times.has(point_id):
+		return result
+	var t: PackedFloat32Array = times[point_id]
+	var v: PackedFloat32Array = values[point_id]
+	for index in range(t.size()):
+		if t[index] < since:
+			continue
+		var boundary := is_nan(v[index])
+		result.append({"time": t[index], "value": null if boundary else v[index], "boundary": boundary})
+	return result
