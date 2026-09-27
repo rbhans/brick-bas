@@ -17,18 +17,15 @@ The build command imports resources, exports the Web preset, and includes engine
 
 ## Publish
 
-Published on 2026-09-22: [Play Brick BAS](https://robboborben.xyz/demos/brick-bas/), linked by **Play in browser** on the [project page](https://robboborben.xyz/projects/brick-bas).
+Live at [robboborben.xyz/demos/brick-bas/](https://robboborben.xyz/demos/brick-bas/), linked by **Play in browser** on the [project page](https://robboborben.xyz/projects/brick-bas).
 
-For this personal site's existing Cloudflare Worker, use the checked packaging step after exporting:
+The game ships from this repo as its own Cloudflare Worker, `brick-bas` (`wrangler.jsonc`, `deploy/worker.ts`). It has no public URL of its own: the personal site's Worker forwards `/demos/brick-bas/*` to it through the `BRICK_BAS` service binding, so the address (and players' browser saves) stays the same while the game deploys independently:
 
 ```sh
-node tools/package_personal_site.mjs ../personal-site
-cd ../personal-site
-npm run validate
-npx wrangler deploy --config dist/server/wrangler.json --keep-vars
+npm run deploy
 ```
 
-The packager copies an explicit game/license allowlist into `public/demos/brick-bas`, validates hashes and the 25 MiB asset limit, and stores the unchanged 39,514,754-byte engine as a 10,153,810-byte gzip asset. The site's `worker/brick-bas.ts` serves the public `index.wasm` URL with the correct MIME type and gzip encoding, or streams a decoded response for clients without gzip. All remaining game files use the existing static-assets binding. No player accounts, save service, storage bucket, station gateway, or additional infrastructure was added. `bundle.json` records the shipped files and their decoded SHA-256 hashes.
+That runs the web export, lays out `dist/site/demos/brick-bas` (`tools/package_site.mjs`), checks it with `deploy/worker.test.mjs` and runs `wrangler deploy`. The 38 MiB engine is stored as a ~10 MiB `index.wasm.gz` (the static host's per-file limit is 25 MiB). `deploy/engine.ts` serves the normal `index.wasm` URL with `application/wasm`, gzip or a decoded fallback, and conditional requests. `bundle.json` records every shipped file's decoded SHA-256. The site never needs redeploying for a game update.
 
 For other hosts, upload **the contents of `dist/web/` only**, preserving filenames. Do not upload the repository, `.cache`, `node_modules`, native user data, connection bridge, or test artifacts.
 
