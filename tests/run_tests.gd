@@ -5,13 +5,10 @@ extends SceneTree
 #   Godot --headless --path . --script res://tests/run_tests.gd
 
 const PointStoreScript := preload("res://scripts/data/point_store.gd")
-const BaskStreamProviderScript := preload("res://scripts/data/bask_stream_provider.gd")
+const LiveStationScript := preload("res://scripts/data/live_station.gd")
+const MatcherScript := preload("res://scripts/data/point_matcher.gd")
 const HistoryStoreScript := preload("res://scripts/data/history_store.gd")
 const BindingScript := preload("res://scripts/data/animation_binding.gd")
-const MessagePackScript := preload("res://scripts/data/message_pack.gd")
-const BaskFixtureScript := preload("res://scripts/data/bask_stream_fixture_transport.gd")
-const BaskWebSocketScript := preload("res://scripts/data/bask_stream_websocket_transport.gd")
-const BaskBridgeTransportScript := preload("res://scripts/data/bask_stream_bridge_transport.gd")
 const Templates := preload("res://scripts/model/templates.gd")
 const Migration := preload("res://scripts/model/migrate_v1.gd")
 
@@ -30,7 +27,8 @@ func _init() -> void:
 	test_animation_bindings()
 	test_point_normalization()
 	test_history_boundaries()
-	test_bask_stream_binary_fixture()
+	test_live_point_normalization()
+	test_point_matcher()
 	test_connection_profile_safety()
 	test_ldraw_runtime_assets()
 	print("UNIT_TESTS %s checks=%d failures=%d" % ["PASS" if failures.is_empty() else "FAIL", checks, failures.size()])
@@ -258,8 +256,8 @@ func test_point_normalization() -> void:
 	expect(point.has("source_timestamp") and point.has("quality_flags") and point.unit == "%", "normalized point fields are retained")
 	var binding: Dictionary = BindingScript.defaults("vav", vav).damper
 	expect(BindingScript.evaluate(binding, point, "demo").known, "automatic VAV damper binding resolves against the simulation")
-	var live := BaskStreamProviderScript.new()
-	expect(not live.write_point("station:|slot:/SomePoint", 1), "the live provider rejects writes")
+	var live := LiveStationScript.new()
+	expect(not live.write_point("slot:/SomePoint", 1), "the live provider rejects writes")
 
 func test_history_boundaries() -> void:
 	var history := HistoryStoreScript.new()
@@ -269,31 +267,49 @@ func test_history_boundaries() -> void:
 	history.mark_boundary("reset", 20.0)
 	expect(bool(history.get_series("room.temp")[-1].boundary), "reset/source changes must create a history boundary")
 
-func test_bask_stream_binary_fixture() -> void:
-	var bytes := MessagePackScript.encode({"op": "ping"})
-	expect(bytes.slice(0, 4) == PackedByteArray([0x81, 0xa2, 0x6f, 0x70]), "baskStream requests use MessagePack maps")
-	var nested := {"op": "cov", "points": [{"point": "slot:/AHU/Fan", "value": 42.5, "ok": true}], "sequence": 1779648232328}
-	var decoded := MessagePackScript.decode(MessagePackScript.encode(nested))
-	expect(bool(decoded.ok) and decoded.value == nested, "MessagePack round-trips maps, arrays, booleans, 64-bit ints, floats")
-	expect(not bool(MessagePackScript.decode(PackedByteArray([0x81, 0xa2, 0x6f])).ok), "malformed binary frames fail closed")
-	var fixture := BaskFixtureScript.new()
-	var live := BaskStreamProviderScript.new()
-	expect(live.attach_transport(fixture), "fixture session completes ping and capabilities")
-	var point_ids: Array[String] = ["slot:/Drivers/AHU/FanSpeed"]
-	expect(live.subscribe(point_ids), "provider creates a read subscription")
-	var points := live.snapshot()
-	expect(points.size() == 1 and points[0].source_id == "niagara" and points[0].quality_flags == ["good"], "snapshots normalize source and quality")
-	fixture.push_cov([{"point": point_ids[0], "value": 0.0, "ok": false, "status": "{stale}"}])
-	points = live.snapshot()
-	expect(points[0].value == 0.0 and points[0].quality_flags == ["stale"], "COV zero values and stale quality are preserved")
-	fixture.close()
-	live.poll()
-	expect(live.connection_state() == "offline" and live.reconnect(), "provider reconnects after transport loss")
-	fixture.push_malformed()
-	live.poll()
-	expect(live.connection_state() == "protocol_error", "invalid MessagePack changes source state")
-	var websocket := BaskWebSocketScript.new()
-	expect(websocket.open_authenticated("http://insecure.example", "cookie") == ERR_INVALID_PARAMETER, "non-TLS station URLs are rejected")
+# Bridge values become game points (the shape bindings, trends and the store use).
+func test_live_point_normalization() -> void:
+	var good: Dictionary = LiveStationScript.normalize({"point": "slot:/Drivers/VAV_1/points/DamperPos", "ok": true, "value": 42, "valueType": "numeric", "status": "{ok}", "units": "%", "timestamp": 1779648232328, "display": "42.0 %"})
+	expect(good.point_id == "slot:/Drivers/VAV_1/points/DamperPos" and good.value is float and good.value_type == "number" and good.unit == "%" and good.source_id == "niagara" and good.quality_flags == ["good"], "a station value normalizes to a niagara point")
+	expect(absf(float(good.source_timestamp) - 1779648232.328) < 0.01, "millisecond timestamps become seconds")
+	var stale: Dictionary = LiveStationScript.normalize({"point": "slot:/x", "ok": true, "value": 0.0, "status": "{stale}"})
+	expect(stale.value == 0.0 and stale.quality_flags == ["stale"], "zero values and stale status survive")
+	var failed: Dictionary = LiveStationScript.normalize({"point": "slot:/x", "ok": false, "status": "{fault,down}"})
+	expect("unknown" in failed.quality_flags and "fault" in failed.quality_flags and "down" in failed.quality_flags, "failed reads are unknown, faults kept")
+	var override: Dictionary = LiveStationScript.normalize({"point": "slot:/x", "ok": true, "value": true, "valueType": "boolean", "status": "{overridden} @ 8"})
+	expect(override.value_type == "bool" and "good" in override.quality_flags and "overridden" in override.quality_flags, "booleans and overrides")
+	expect(LiveStationScript.normalize({"value": 1}).is_empty(), "a value without a point is dropped")
+	var binding := {"source": "niagara", "point_id": good.point_id, "mapping": "number", "input_min": 0.0, "input_max": 100.0, "unit": ""}
+	var sample: Dictionary = BindingScript.evaluate(binding, good, "niagara")
+	expect(bool(sample.known) and absf(float(sample.level) - 0.42) < 1.0e-6, "a live point drives an animation binding")
+	expect(not bool(BindingScript.evaluate(binding, stale, "niagara").known), "stale live points hold the animation")
+	var dying := LiveStationScript.new()
+	dying.state = "connecting"
+	dying._pending = {"hello-1": {"op": "hello", "callback": dying._on_hello, "sent": 0}, "connect-2": {"op": "connect", "callback": dying._on_connected, "sent": 0}}
+	dying._fail("Bridge closed")
+	expect(dying.state == "error" and dying.message == "Bridge closed" and dying._pending.is_empty(), "losing the bridge mid-login fails once, without recursing")
+	var live := LiveStationScript.new()
+	expect(live.connection_state() == "offline" and live.snapshot().is_empty(), "a new live provider starts offline")
+	live.watch(["slot:/a", "slot:/b"])
+	expect(live.watched.size() == 2, "the watch list is kept until the bridge is up")
+
+# Auto-mapping a station device's points list onto a VAV and an AHU.
+func test_point_matcher() -> void:
+	var vav_points := ["SpaceTemp", "ClgSetpoint", "HtgSetpoint", "DamperPos", "DamperCmd", "AirflowCFM", "AirflowSp", "ReheatVlvPos", "DischargeAirTemp", "Occupied"].map(func(n: String) -> Dictionary: return {"ord": "slot:/VAV/" + n, "name": n, "kind": "point"})
+	var vav: Dictionary = MatcherScript.match_points("vav", vav_points)
+	expect(String(vav.get("damper", {}).get("name", "")) == "DamperPos", "damper feedback beats command (%s)" % str(vav.get("damper", {}).get("name", "")))
+	expect(String(vav.get("airflow", {}).get("name", "")) == "AirflowCFM", "airflow, not its setpoint")
+	expect(String(vav.get("heating_coil", {}).get("name", "")) == "ReheatVlvPos", "reheat valve")
+	expect(String(vav.get("space_temp", {}).get("name", "")) == "SpaceTemp", "room temperature, not the setpoints")
+	expect(not vav.has("cooling_coil"), "no guess where nothing fits")
+	var vendor := ["ZN-T", "ZN-T-SP", "DMPR-FB", "DMPR-CMD", "SA-FLOW", "SA-FLOW-SP", "HW-VLV"].map(func(n: String) -> Dictionary: return {"ord": "slot:/V2/" + n, "name": n, "kind": "point"})
+	var other: Dictionary = MatcherScript.match_points("vav", vendor)
+	expect(String(other.get("space_temp", {}).get("name", "")) == "ZN-T" and String(other.get("damper", {}).get("name", "")) == "DMPR-FB" and String(other.get("airflow", {}).get("name", "")) == "SA-FLOW" and String(other.get("heating_coil", {}).get("name", "")) == "HW-VLV", "another vendor's names (%s)" % str(other.keys()))
+	var ahu_points := ["SupplyFanSpd", "SupplyFanCmd", "SupplyAirTemp", "SupplyAirTempSp", "OutsideAirDmprPos", "ChwVlvPos", "HwVlvPos", "DuctStaticPress", "FilterDp"].map(func(n: String) -> Dictionary: return {"ord": "slot:/AHU/" + n, "name": n, "kind": "point"})
+	var ahu: Dictionary = MatcherScript.match_points("ahu", ahu_points)
+	expect(String(ahu.get("fan", {}).get("name", "")) == "SupplyFanSpd" and String(ahu.get("cooling_coil", {}).get("name", "")) == "ChwVlvPos" and String(ahu.get("heating_coil", {}).get("name", "")) == "HwVlvPos", "AHU fan and valves (%s)" % str(ahu.keys()))
+	var binding: Dictionary = MatcherScript.binding_for("airflow", vav.airflow, "cfm", 0.3, "station")
+	expect(binding.source == "niagara" and binding.point_id == "slot:/VAV/AirflowCFM" and absf(float(binding.input_max) - 636.0) < 1.0, "airflow binding scales to the box's CFM")
 
 func test_connection_profile_safety() -> void:
 	var model := ProjectModel.new()
@@ -304,9 +320,8 @@ func test_connection_profile_safety() -> void:
 	expect(loaded.load_from(path) and loaded.connections.size() == 1, "connection profile loads with the project")
 	expect(not loaded.connections[0].has("password"), "password is never persisted")
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
-	var bridge := BaskBridgeTransportScript.new()
-	bridge.configure(loaded.connections[0], "")
-	expect(not bridge.open() and bridge.state() == "error", "bridge rejects a connection without an in-memory password")
+	var station := LiveStationScript.new()
+	expect(not station.open("ws://127.0.0.1:1/baskstream", "token", loaded.connections[0], "") or station.state in ["bridge", "error"], "the live provider never needs a saved password")
 
 func test_ldraw_runtime_assets() -> void:
 	var manifest: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://assets/third_party/ldraw/selection.json"))

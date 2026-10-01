@@ -1,6 +1,11 @@
 # BRICK / BAS
 
-A brick-built building sandbox where the building's HVAC actually runs. Lay out rooms like a house-building game, zone them with air handlers, VAV boxes, ductwork and thermostats built from LDraw parts, then watch a realistic simulated BAS drive the fans, dampers, coils and airflow, or walk around inside as a minifigure.
+A brick-built building game where the building's HVAC actually runs. Lay out rooms like a house-building game, zone them with air handlers, VAV boxes, ductwork and thermostats built from LDraw parts, then watch a simulated BAS drive the fans, dampers, coils and airflow, or walk around inside as a minifigure.
+
+Two ways to play:
+
+- **Career**: run a controls contracting business. *Install* jobs: design and build a building's HVAC on a budget and commission it over a simulated day. *Service calls*: read the BAS, walk to the equipment, test it and fit the right part before the deadline. *Tune-ups*: re-program a wasteful building and prove the savings. Stars, money, ranks and an endless on-call board. See [docs/CAREER.md](docs/CAREER.md).
+- **Creative**: build anything, no goals. Run it on the simulated building or, on desktop, on **live points from a Niagara station** through the baskStream SDK (read-only). See [docs/LIVE_DATA.md](docs/LIVE_DATA.md).
 
 Built with typed GDScript on **Godot 4.7.2 stable** (standard edition). One world unit is one metre; one enlarged LDraw stud is 0.5 m.
 
@@ -21,7 +26,9 @@ npm run web:serve
 
 Then open `http://127.0.0.1:8060`. Upload the contents of `dist/web/` to any static host to publish. Saves stay in the player's browser; use **Download backup / Import backup** to move them. See [web hosting and save behavior](docs/WEB_HOSTING.md).
 
-Choose **New game → a starter**: the *Corner workshop*, *Neighborhood office*, *Elementary school* or an *Empty lot*. Every starter comes furnished, zoned and already running. Change anything.
+The title screen offers **Career** (the job board) and **Creative** (choose a starter: the *Corner workshop*, *Neighborhood office*, *Elementary school* or an *Empty lot*, each furnished, zoned and already running; on desktop, choose simulated or live data).
+
+Live data needs Node.js 20+ and `npm install` (the bridge and the vendored baskStream SDK). The game starts the bridge itself. To try it without a station, use **Try the demo station** on the Live station page, or run `npm run demo-station`.
 
 ## Modes
 
@@ -42,6 +49,8 @@ Choose **New game → a starter**: the *Corner workshop*, *Neighborhood office*,
 - **Move** a unit and its ducts re-route with it. If it would land on another duct, the move is refused. **Delete** takes a unit's ducts with it; pulling a trunk cross out of a main re-joins the main.
 - **Duct run** is for hand-routing: click one socket, then another. **PageUp/PageDown** change elevation, and clicks add bends. A red **Reroute duct** marker flags a run that no longer clears.
 - **B** toggles the BAS overlay, which tints rooms by temperature against their setpoints. Select anything for a live readout and trend chart. The alarm button lists active alarms with **Show** and **Acknowledge**.
+- **Edit components** also sets an air handler's size (design airflow) and shows its installed price.
+- **Menu → BAS programming** changes the sequences: occupied schedule, optimal start, supply-air and static-pressure resets, economizer, demand ventilation, VAV minimums and room setpoints. The clock panel shows the building's power and energy cost.
 
 **Explore**: **WASD** walks, **Shift** runs, **Space** jumps, drag to look, wheel to zoom. Doors open as you walk into them and close behind you. **E** only offers things that really do something: sit down, adjust a thermostat (**+ / −** in 1 °F steps), open an AHU access door, lift a VAV's casing to watch its damper and reheat coil, or show the airflow at a diffuser (its prompt reads live CFM and supply temperature). Overhead ducts fade as you pass under them. **Tab** returns to Build.
 
@@ -52,15 +61,18 @@ Camera in Build/Equipment: right-drag orbits, middle-drag pans, wheel zooms towa
 Demo data comes from a deterministic, fixed-step model built to behave like a real VAV reheat system:
 
 - dual-maximum VAV reheat control, supply-air temperature and duct static pressure trim & respond, and an airside economizer;
-- demand-controlled ventilation from CO₂, optimal start, occupied and unoccupied setpoints;
-- two-node zone thermal mass, solar gain through each room's actual windows by orientation, and internal loads by room type;
-- actuator travel times, fan spin-up, filter loading, and fault scenarios such as a failed fan, a dirty filter, a stuck damper or a biased sensor.
+- demand-controlled ventilation from CO₂, optimal start, occupied and unoccupied setpoints, all reprogrammable;
+- two-node zone thermal mass, solar gain through each room's actual windows by orientation, and internal loads by room type (people keep their own hours whatever the HVAC schedule says);
+- actuator travel times, fan spin-up, filter loading, and faults: scenario-wide (a failed fan, a dirty filter, a stuck damper, a biased sensor) or aimed at any one unit (stuck valves and dampers, broken belts, loaded filters, miscalibrated sensors);
+- energy (fans, chilled water, hot water → kWh, therms, dollars) and comfort meters (on setpoint, 68–76.5 °F, CO₂), and a time-lapse up to 1800×.
 
 Everything is displayed in US units (°F, CFM, in. w.c., ft, sq ft); the model itself runs in SI and converts only for display (`scripts/core/units.gd`). The **Point links** editor shows each point's raw engineering units, since its mapping ranges must match the incoming data.
 
 Air only reaches a room through the ducts you actually connected: AHU outlet → trunk crosses/tees → VAV → diffusers. Each VAV serves the room its diffusers sit in. Model details, point names and limits are in [docs/SIMULATION.md](docs/SIMULATION.md). This is a game model, not an engineering or commissioning tool.
 
-The desktop build keeps the read-only Niagara/baskStream connection path (**Menu → Data source**; the password stays in memory only). It is tabled until the baskStream SDK is final. The browser build is demo-only.
+Ducts and fittings are sized for the VAVs they carry, VAVs for their room's load, and air handlers for their VAVs (with a little diversity). Undersizing an air handler is a real design mistake on a hot afternoon.
+
+On desktop, the same equipment can run on a live Niagara station instead: Menu → **Live station**, or pick it when starting Creative. The bridge (`scripts/baskstream-bridge.mjs`) uses the baskStream SDK, is read-only, and keeps the password in memory only. The browser build runs on the simulation.
 
 ## Test
 
@@ -75,9 +87,12 @@ $godot --headless --path . --script res://tests/explore_mode.gd         # starte
 $godot --headless --path . --script res://tests/browser_saves.gd        # save/import/migration
 $godot --headless --path . --script res://tests/simulation_fidelity.gd  # control sequences and physics
 $godot --headless --path . --script res://tests/geometry_overlaps.gd    # no coplanar bricks (z-fighting) in any starter
+$godot --headless --path . --script res://tests/career_mode.gd          # every career job played and won; targets match the sim
+$godot --headless --path . --script res://tests/live_station.gd         # live mode end to end against the demo station (needs Node)
+npm run test:bridge                                                     # the read-only bridge through the SDK
 ```
 
-`tests/connection_smoke.gd` needs `node tests/mock_baskstream_station.mjs` running first.
+`tools/compile_check.gd` loads every script to catch parse errors. `tools/ui_screens.gd` renders every UI state to PNGs, in creative, career and live sets (`--set=`; run it with a window). The UI's colours, type scale, spacing and button styles live in `scripts/ui/toy_theme.gd`. `tools/career_calibrate.gd` and `tests/career_mode.gd -- --calibrate` measure the energy and comfort numbers the jobs are tuned from.
 
 Rendered captures: `Godot --path . -- --template=office --equipment --capture=/tmp/office.png`. Other flags (`--view=`, `--explore`, `--select=`, `--speed=`, `--walls=`) are parsed in `_ready()` of `scripts/game.gd`. `tools/bake_starter_cards.gd`, `tools/bake_arch_thumbnails.gd` and `tools/bake_catalog_thumbnails.gd` regenerate the UI thumbnails from the real assemblies.
 
@@ -88,10 +103,12 @@ Rendered captures: `Godot --path . -- --template=office --equipment --capture=/t
 - `scripts/model`: the project model and saves, room detection, starter templates, the furnisher and the HVAC seeder.
 - `scripts/build`: architecture rendering, the camera, build tools, equipment models, the duct router and the zone planner.
 - `scripts/network`: the supply-air graph and room-to-zone topology.
-- `scripts/sim`: the demo simulation.
-- `scripts/data`: point store, trend history and data source.
+- `scripts/sim`: the simulation and alarms.
+- `scripts/career`: the job catalog, a job in progress, the career save, service tests and repairs, equipment prices.
+- `scripts/data`: point store, trend history, the data source, the live station client and the point matcher.
 - `scripts/explore`: the minifigure and interactions.
-- `scripts/ui`: the HUD, workbench and trend charts.
+- `scripts/ui`: the HUD, workbench, trend charts, title/career pages, the job panel, the service panel and BAS programming.
+- `scripts/baskstream-bridge.mjs`, `vendor/baskstream-sdk`: the read-only live-data bridge and the SDK it uses. `tools/demo_station.mjs`: a stand-in station.
 
 ## Assets
 

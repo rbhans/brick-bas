@@ -16,7 +16,7 @@ const files = [
   'index.audio.worklet.js', 'index.audio.position.worklet.js',
   'index.png', 'index.icon.png', 'index.apple-touch-icon.png',
   'ASSET_CREDITS.md', 'GODOT-LICENSES.txt', 'LDraw-AUTHORS.json',
-  'LDraw-LICENSE.txt', 'Audio-LICENSE.txt',
+  'LDraw-LICENSE.txt', 'Audio-LICENSE.txt', 'Font-LICENSE.txt',
 ];
 for (const file of files) await stat(join(source, file));
 await mkdir(target, { recursive: true });

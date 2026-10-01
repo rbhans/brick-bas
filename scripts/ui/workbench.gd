@@ -33,6 +33,10 @@ var lineup: HBoxContainer
 var parts: HBoxContainer
 var place_button: Button
 var presets: OptionButton
+var size_row: VBoxContainer
+var size_pick: OptionButton
+var price_label: Label
+var capacity := HvacCosts.DEFAULT_AHU_SIZE
 var sensor_tile: Button
 var part_tiles: Dictionary = {}
 
@@ -40,24 +44,27 @@ func setup(owner: Node, equipment_view: Node) -> void:
 	game = owner
 	view = equipment_view
 	set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
-	offset_left = -520
-	offset_right = 520
-	offset_top = -420
-	offset_bottom = -44
+	offset_left = -530
+	offset_right = 530
+	offset_top = -440
+	offset_bottom = -ToySkin.MARGIN
 	# Taller content grows up the screen, never off the bottom edge.
 	grow_vertical = Control.GROW_DIRECTION_BEGIN
-	add_theme_stylebox_override("panel", UIKit.glass_style(18, 0.97))
+	add_theme_stylebox_override("panel", ToySkin.card(0.98, 20))
 	z_index = 20
-	var body := UIKit.row(self, 14)
+	var body := UIKit.row(self, 20)
+	var stage_well := PanelContainer.new()
+	stage_well.add_theme_stylebox_override("panel", ToySkin.fill(ToySkin.INK_WELL, ToySkin.RADIUS_CARD - 2, 0))
+	body.add_child(stage_well)
 	var container := SubViewportContainer.new()
-	container.custom_minimum_size = Vector2(430, 340)
+	container.custom_minimum_size = Vector2(430, 360)
 	container.stretch = true
-	body.add_child(container)
+	stage_well.add_child(container)
 	viewport = SubViewport.new()
 	viewport.own_world_3d = true
 	viewport.transparent_bg = true
 	viewport.msaa_3d = Viewport.MSAA_4X
-	viewport.size = Vector2i(430, 340)
+	viewport.size = Vector2i(430, 360)
 	container.add_child(viewport)
 	var stage := Stage.new()
 	viewport.add_child(stage)
@@ -78,38 +85,54 @@ func setup(owner: Node, equipment_view: Node) -> void:
 	preview_camera = Camera3D.new()
 	preview_camera.fov = 34
 	stage.add_child(preview_camera)
-	var column := UIKit.column(body, 10)
+	var column := UIKit.column(body, 12)
 	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var header := UIKit.row(column)
-	title = UIKit.label(header, "AIR HANDLER WORKBENCH", 17)
-	title.add_theme_font_override("font", ToySkin.font(800))
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UIKit.tile(header, "Close · Esc", "close", close, Vector2(30, 28))
-	hint = UIKit.label(column, "", 12, Color("b9c4c7"))
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	presets = UIKit.options(column, [])
+	var header := UIKit.row(column, 8)
+	var titles := UIKit.column(header, 2)
+	titles.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UIKit.section(titles, "Workbench")
+	title = UIKit.title(titles, "Air handler", ToySkin.SIZE_HEADING)
+	UIKit.tile(header, "Close · Esc", "close", close, Vector2(32, 30)).size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	hint = UIKit.text(column, "", ToySkin.SIZE_BODY, ToySkin.TEXT_2)
+	var choices := UIKit.row(column, 14)
+	var layout_field := UIKit.column(choices, 5)
+	layout_field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UIKit.label(layout_field, "Starting layout", ToySkin.SIZE_SMALL, ToySkin.TEXT_3, ToySkin.WEIGHT_STRONG)
+	presets = UIKit.options(layout_field, [])
 	presets.item_selected.connect(_apply_preset)
-	UIKit.label(column, "AIRFLOW  →", 12, Color("9fd9d3"))
-	lineup = UIKit.row(column, 6)
-	var edits := UIKit.row(column, 6)
-	UIKit.tile(edits, "Move left", "left", func() -> void: _shift(-1), Vector2(38, 32))
-	UIKit.tile(edits, "Move right", "right", func() -> void: _shift(1), Vector2(38, 32))
-	UIKit.tile(edits, "Remove selected", "close", _remove, Vector2(38, 32))
-	UIKit.label(column, "ADD A SECTION", 12, Color("9fd9d3"))
+	size_row = UIKit.column(choices, 5)
+	size_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UIKit.label(size_row, "Size", ToySkin.SIZE_SMALL, ToySkin.TEXT_3, ToySkin.WEIGHT_STRONG)
+	size_pick = UIKit.options(size_row, [])
+	size_pick.tooltip_text = "Design airflow. Too small and it runs flat out and falls behind on hot days; too big costs more and wastes fan energy."
+	size_pick.item_selected.connect(func(index: int) -> void: capacity = float(size_pick.get_item_metadata(index)); _changed())
+	var price := UIKit.column(choices, 3)
+	price.size_flags_vertical = Control.SIZE_SHRINK_END
+	UIKit.label(price, "Installed price", ToySkin.SIZE_SMALL, ToySkin.TEXT_3, ToySkin.WEIGHT_STRONG)
+	price_label = UIKit.label(price, "", ToySkin.SIZE_TITLE, ToySkin.YELLOW, ToySkin.WEIGHT_HEAVY)
+	var flow := UIKit.row(column, 8)
+	UIKit.section(flow, "Airflow · left to right").size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	UIKit.spacer(flow)
+	UIKit.tile(flow, "Move the selected section left", "left", func() -> void: _shift(-1), Vector2(36, 30))
+	UIKit.tile(flow, "Move the selected section right", "right", func() -> void: _shift(1), Vector2(36, 30))
+	UIKit.tile(flow, "Remove the selected section", "close", _remove, Vector2(36, 30))
+	var lineup_well := PanelContainer.new()
+	lineup_well.add_theme_stylebox_override("panel", ToySkin.fill(ToySkin.INK_WELL, ToySkin.RADIUS_CONTROL, 8))
+	column.add_child(lineup_well)
+	lineup = UIKit.row(lineup_well, 6)
+	UIKit.section(column, "Add a section")
 	parts = UIKit.row(column, 6)
 	for role in ROLES:
 		var id := String(role)
 		var tile := UIKit.tile(parts, String(LABELS[id]), "", func() -> void: _add(id), Vector2(82, 88), "part")
-		tile.face_color = Color("e5dfca")
+		tile.face_color = ToySkin.CREAM_WELL
 		tile.thumbnail = UIKit.thumbnail(id)
 		part_tiles[id] = tile
 	sensor_tile = UIKit.tile(parts, "Sensor", "", func() -> void: sensor = not sensor; _changed(), Vector2(82, 88), "part")
 	sensor_tile.thumbnail = UIKit.thumbnail("sensor")
-	sensor_tile.face_color = Color("e5dfca")
-	place_button = Button.new()
-	place_button.custom_minimum_size.y = 42
-	place_button.pressed.connect(_commit)
-	column.add_child(place_button)
+	sensor_tile.face_color = ToySkin.CREAM_WELL
+	place_button = UIKit.button(column, "Place it in the building", _commit, "PrimaryButton")
+	place_button.custom_minimum_size.y = 44
 	hide()
 
 func open(equipment_kind: String, id: String = "") -> void:
@@ -124,7 +147,9 @@ func open(equipment_kind: String, id: String = "") -> void:
 		layout.append(String(roles[index]))
 		records.append(existing[index].duplicate(true) if index < existing.size() and existing[index] is Dictionary else _record(String(roles[index])))
 	sensor = bool(source.get("sensor_enabled", true))
-	title.text = ("EDIT %s" % String(game.model.find_object(id).properties.get("label", kind.to_upper()))) if not id.is_empty() else ("AIR HANDLER WORKBENCH" if kind == "ahu" else "VAV WORKBENCH")
+	capacity = float(source.get("capacity_m3_s", HvacCosts.DEFAULT_AHU_SIZE)) if kind == "ahu" else float(source.get("capacity_m3_s", 0.45))
+	_fill_sizes()
+	title.text = ("Edit %s" % String(game.model.find_object(id).properties.get("label", kind.to_upper()))) if not id.is_empty() else ("Air handler" if kind == "ahu" else "VAV box")
 	presets.clear()
 	for preset in PRESETS[kind]:
 		presets.add_item(String(preset[0]))
@@ -142,7 +167,21 @@ func _record(role: String) -> Dictionary:
 	return {"id": "component-%d-%04d" % [Time.get_ticks_msec() % 100000, serial], "role": role, "paint": {}, "bindings": {}}
 
 func config() -> Dictionary:
-	return {"layout": layout.duplicate(), "component_records": records.duplicate(true), "sensor_enabled": sensor}
+	var result := {"layout": layout.duplicate(), "component_records": records.duplicate(true), "sensor_enabled": sensor}
+	if kind == "ahu": result.capacity_m3_s = capacity
+	return result
+
+func _fill_sizes() -> void:
+	size_row.visible = kind == "ahu"
+	size_pick.clear()
+	var sizes: Array = HvacCosts.AHU_SIZES.duplicate()
+	var known := false
+	for value in sizes: known = known or absf(float(value) - capacity) < 0.01
+	if not known: sizes.append(capacity)
+	for value in sizes:
+		size_pick.add_item(HvacCosts.size_label(float(value)))
+		size_pick.set_item_metadata(size_pick.item_count - 1, float(value))
+		if absf(float(value) - capacity) < 0.01: size_pick.select(size_pick.item_count - 1)
 
 func layout_error(candidate: Array) -> String:
 	if candidate.is_empty() or candidate[0] != "damper" or candidate.count("damper") != 1:
@@ -252,6 +291,7 @@ func _changed() -> void:
 	sensor_tile.marked = sensor
 	sensor_tile.queue_redraw()
 	hint.text = "Air flows left to right. Sections: %d · Air enters at the damper%s." % [layout.size(), " and the fan pushes it into the ductwork" if kind == "ahu" else " and leaves toward the diffusers"]
+	price_label.text = "%s" % Units.money(HvacCosts.item_cost({"kind": kind, "properties": config()}, []))
 	var error := layout_error(layout)
 	place_button.disabled = not error.is_empty()
 	if not error.is_empty(): hint.text = error

@@ -672,7 +672,7 @@ func inspect(id: String) -> Dictionary:
 			if bool(sample.known): level = float(sample.level)
 			actions.append(game.action("Airflow view", "airflow", toggle_airflow_view))
 		"diffuser":
-			text = diffuser_readout(item)
+			text = diffuser_readout(item) if game.data.is_demo() else "Ceiling diffuser"
 		"tee", "cross":
 			var free := DuctPorts.port_names(item).filter(func(name: String) -> bool: return not DuctPorts.occupied(DuctPorts.port(item, name), game.model.objects))
 			text = "%s · %d of %d sockets free" % ["Trunk cross: straight through plus two branches" if item.kind == "cross" else "Branch tee: one duct in, two out", free.size(), DuctPorts.port_names(item).size()]
@@ -689,6 +689,8 @@ func inspect(id: String) -> Dictionary:
 # One-line live summary for floating prompts.
 func short_readout(id: String) -> String:
 	var item: Dictionary = game.model.find_object(id)
+	if not game.data.is_demo():
+		return live_readout(item).replace("\n", " · ")
 	match String(item.get("kind", "")):
 		"ahu":
 			var unit: Dictionary = game.sim.unit_state(id)
@@ -741,8 +743,29 @@ static func trends(item: Dictionary) -> Array:
 			return [{"point_id": id + ".airflow", "label": "Airflow", "color": Color("7fe3ff"), "quantity": "flow", "own_axis": true, "min": 0.0, "max": Units.cfm(float(item.properties.get("capacity_m3_s", 1.2)))}]
 	return []
 
+# On a live station: each linked point's reading, as the station shows it.
+func live_readout(item: Dictionary) -> String:
+	var lines: Array[String] = []
+	var bindings: Dictionary = item.get("properties", {}).get("bindings", {})
+	for role in PointMatcher.ROLES_BY_KIND.get(String(item.get("kind", "")), []):
+		var binding: Dictionary = bindings.get(role, {})
+		if String(binding.get("source", "")) != "niagara": continue
+		var point: Dictionary = game.points.get_point(String(binding.get("point_id", "")))
+		var shown := "waiting…"
+		if not point.is_empty():
+			shown = String(point.get("display", ""))
+			if shown.is_empty(): shown = str(point.get("value", "--"))
+			var flags: Array = point.get("quality_flags", [])
+			if not flags.has("good"): shown += " (%s)" % ", ".join(flags)
+		lines.append("%s %s" % [String(PointMatcher.ROLE_LABELS.get(role, role)), shown])
+	if lines.is_empty():
+		return "No station points linked · open its details (•••) to link or auto-map them"
+	return "\n".join(lines)
+
 func readout(item: Dictionary) -> String:
 	var id := String(item.id)
+	if not game.data.is_demo():
+		return live_readout(item)
 	if item.kind == "ahu":
 		var unit: Dictionary = game.sim.unit_state(id)
 		if unit.is_empty(): return "Air handler · waiting for the simulation"
@@ -750,7 +773,7 @@ func readout(item: Dictionary) -> String:
 		lines.append("%s · fan %d %% · %s" % [String(unit.get("mode", "")), roundi(float(unit.fan_feedback) * 100.0), Units.flow(float(unit.supply_airflow_m3_s))])
 		lines.append("Supply %s (set %s) · static %s" % [Units.temp(float(unit.supply_temp_c), 1), Units.temp(float(unit.supply_setpoint_c)), Units.pressure(float(unit.duct_pressure_pa))])
 		lines.append("Outdoor air %d %%%s · cool %d %% · heat %d %%" % [roundi(float(unit.oa_fraction) * 100.0), " (economizer)" if bool(unit.get("economizer", false)) else "", roundi(float(unit.cooling_output) * 100.0), roundi(float(unit.heating_output) * 100.0)])
-		if not String(unit.get("fault", "")).is_empty():
+		if not String(unit.get("fault", "")).is_empty() and game.job == null:
 			lines.append("Fault: %s" % String(unit.fault).replace("_", " "))
 		return "\n".join(lines)
 	var terminal: Dictionary = game.sim.terminal_state(id)

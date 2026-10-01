@@ -4,6 +4,8 @@ extends Node
 #   Build      Sims-style architecture, furniture and landscaping
 #   Equipment  place and connect HVAC (with the AHU/VAV workbench)
 #   Explore    walk the building as a minifigure and use what you built
+# and the two ways to play: Creative (the sandbox, simulated or live station
+# data) and Career (contract jobs with objectives, run by a JobSession).
 # Everything visible is rebuilt from the model after each undoable change.
 
 enum Mode { BUILD, EQUIPMENT, EXPLORE }
@@ -21,6 +23,9 @@ const SessionUI := preload("res://scripts/ui/session_ui.gd")
 const BrowserFiles := preload("res://scripts/ui/browser_files.gd")
 const EquipmentViewScript := preload("res://scripts/build/equipment_view.gd")
 const ExplorerScript := preload("res://scripts/explore/explorer.gd")
+const TURBO_BUDGET_US := 9000 # simulation time per frame while time-lapsing...
+const TURBO_BUDGET_MAX_US := 50000 # ...growing with slow frames, so a slow machine still gets through the day
+const EDIT_GLYPHS := ["move", "rotate", "copy", "hammer", "build", "duct", "paint", "floor", "link"]
 
 signal mode_changed(mode: int)
 signal selection_changed(id: String)
@@ -73,12 +78,18 @@ var furniture_info: Dictionary = {}  # furniture id -> {seats} in world space
 var _ui_timer := 0.0
 var _overlay_timer := 0.0
 var _last_open_signature := ""
+var career: CareerState
+var job: JobSession          # the career job in progress (null in Creative)
+var turbo_until := -1.0      # time-lapse target in simulation seconds (< 0: off)
+var _backfilled: Dictionary = {} # "connection|ORD" -> true once its station history was asked for
+var _live_epoch := -1.0 # local midnight the live clock counts from (keeps trend times float32-exact)
 
 func _ready() -> void:
 	name = "Game"
 	# The browser tab and desktop window show the game's name (a frame later:
 	# the engine applies the project name itself once the scene is up).
 	_set_title.call_deferred()
+	career = CareerState.load_or_new()
 	points = PointStoreScript.new()
 	history = HistoryStoreScript.new()
 	alarms = AlarmManagerScript.new()
@@ -161,6 +172,10 @@ func _exit_tree() -> void:
 # --- Model changes -------------------------------------------------------------
 
 func apply(label: String, adds: Array = [], removes: Array = [], updates: Array = []) -> Dictionary:
+	# The last word on career locks: a tool or workbench left open when a job
+	# phase changed can't commit what the job no longer allows.
+	if job != null and not _edits_allowed(adds, removes, updates):
+		return {"added": [], "changed": 0}
 	var result := commands.apply(label, adds, removes, updates)
 	var added_ids: Array = []
 	for item in result.added:
@@ -170,6 +185,8 @@ func apply(label: String, adds: Array = [], removes: Array = [], updates: Array 
 	return result
 
 func undo() -> void:
+	if _blocked("equipment"):
+		return
 	var command := commands.undo()
 	if command.is_empty():
 		set_status("Nothing to undo")
@@ -179,6 +196,8 @@ func undo() -> void:
 	set_status("Undid %s" % String(command.action).to_lower())
 
 func redo() -> void:
+	if _blocked("equipment"):
+		return
 	var command := commands.redo()
 	if command.is_empty():
 		set_status("Nothing to redo")
@@ -312,6 +331,9 @@ func finish_tool() -> void:
 	set_tool(SelectTool.new(self))
 
 func start_tool(tool_id: String, params: Dictionary = {}) -> void:
+	var touches := "equipment" if tool_id in ["equipment", "duct", "zone", "delete"] or (tool_id == "place" and String(params.get("kind", "")) == "tstat") else "architecture"
+	if _blocked(touches):
+		return
 	if mode == Mode.EXPLORE:
 		set_mode(Mode.BUILD)
 	match tool_id:
@@ -516,7 +538,7 @@ func can_move(id: String) -> bool:
 
 func start_move(id: String) -> void:
 	var item: Dictionary = model.find_object(id)
-	if item.is_empty():
+	if item.is_empty() or _blocked(edit_kind(id)):
 		return
 	select(id)
 	match String(item.kind):
@@ -530,7 +552,7 @@ func start_move(id: String) -> void:
 
 func rotate_selected() -> void:
 	var item: Dictionary = model.find_object(selected_id)
-	if item.is_empty():
+	if item.is_empty() or _blocked(edit_kind(selected_id)):
 		return
 	var changed := item.duplicate(true)
 	match String(item.kind):
@@ -562,7 +584,7 @@ func rotate_selected() -> void:
 	play_sound("tick")
 
 func delete_selected() -> void:
-	if selected_id.is_empty():
+	if selected_id.is_empty() or _blocked(edit_kind(selected_id)):
 		return
 	var plan := removal_plan([selected_id])
 	var label := describe(selected_id)
@@ -573,7 +595,7 @@ func delete_selected() -> void:
 
 func duplicate_selected() -> void:
 	var item: Dictionary = model.find_object(selected_id)
-	if item.is_empty() or not can_move(selected_id) or item.kind in ["door", "window"]:
+	if item.is_empty() or not can_move(selected_id) or item.kind in ["door", "window"] or _blocked(edit_kind(selected_id)):
 		return
 	match String(item.kind):
 		"furniture", "tree", "shrub", "parking":
@@ -701,17 +723,19 @@ func _watch_frame_rate(delta: float) -> void:
 	_slow_seconds = maxf(0.0, _slow_seconds + (delta if delta > 1.0 / 38.0 else -delta * 0.5))
 	if _slow_seconds > 4.0:
 		_apply_graphics(true)
-		set_status("Things were running slowly, so graphics switched to Low · Menu → Graphics to change it")
+		set_status("Things were running slowly, so graphics switched to Low · change it in Menu, Graphics")
 
 func _process(delta: float) -> void:
-	var steps := sim.advance(delta) if data.is_demo() else 0
+	var steps := _advance_simulation(delta)
 	if not data.is_demo():
 		data.provider.poll()
 	var updates := data.provider.snapshot()
 	points.apply_updates(updates)
-	history.sample(updates, sim.sim_seconds)
+	history.sample(updates, history_time())
 	if steps > 0:
 		alarms.evaluate(sim, float(steps) * DemoSimulation.STEP_SECONDS)
+	if job != null:
+		job.process(steps)
 	equipment.animate(delta)
 	_watch_frame_rate(delta)
 	if tool != null and mode != Mode.EXPLORE:
@@ -729,6 +753,45 @@ func _process(delta: float) -> void:
 		if _overlay_timer > 0.5:
 			_overlay_timer = 0.0
 			_refresh_overlay()
+
+# Normal play advances at the chosen speed. A time-lapse (job runs, travel,
+# work in progress) steps as fast as a per-frame time budget allows until it
+# reaches its target, ignoring pause, so the building visibly runs the day.
+func _advance_simulation(delta: float) -> int:
+	if not data.is_demo():
+		return 0
+	if turbo_until <= sim.sim_seconds:
+		return sim.advance(delta)
+	var started := Time.get_ticks_usec()
+	var budget := clampi(int(delta * 500000.0), TURBO_BUDGET_US, TURBO_BUDGET_MAX_US)
+	var remaining := int(ceil(turbo_until - sim.sim_seconds))
+	var steps := 0
+	while steps < remaining:
+		var chunk := mini(10, remaining - steps)
+		sim.run_steps(chunk)
+		steps += chunk
+		if Time.get_ticks_usec() - started > budget:
+			break
+	return steps
+
+# The clock trends run on: simulated seconds, or local wall-clock seconds
+# (so the hour grid reads true) when the data is live from a station.
+func history_time() -> float:
+	if data == null or data.is_demo():
+		return sim.sim_seconds
+	# Local seconds since the midnight the session went live: small enough for
+	# the trend store's float32 times, and the hour grid still reads true.
+	var zone: Dictionary = Time.get_time_zone_from_system()
+	var local := Time.get_unix_time_from_system() + float(zone.get("bias", 0)) * 60.0
+	if _live_epoch < 0.0:
+		_live_epoch = floor(local / 86400.0) * 86400.0
+	return local - _live_epoch
+
+func set_turbo(until: float) -> void:
+	turbo_until = until
+	sim.accumulator = 0.0
+	if is_instance_valid(hud):
+		hud.refresh_simulation_controls()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if session_ui.visible:
@@ -901,12 +964,73 @@ func _refresh_overlay(rebuild: bool = false) -> void:
 	for tile in overlay_root.get_children():
 		var room_id := String(tile.get_meta("room_id"))
 		if not materials.has(room_id):
-			materials[room_id] = _overlay_material(sim.zone_state(room_id))
+			materials[room_id] = _overlay_material(_room_state(room_id))
 		tile.material_override = materials[room_id]
 	for label in room_labels.get_children():
-		var state: Dictionary = sim.zone_state(String(label.get_meta("room_id")))
+		var state: Dictionary = _room_state(String(label.get_meta("room_id")))
 		var base := String(index.room_by_id(String(label.get_meta("room_id"))).get("label", "")).to_upper()
 		label.text = base if state.is_empty() else "%s\n%s · %s" % [base, Units.temp(float(state.get("temp_c", 0.0)), 1), String(state.get("mode", "")) if bool(state.get("served", false)) else "no air"]
+
+# A room's temperature for the overlay: the simulation's, or on a live station
+# the linked room-temperature point of a VAV or thermostat in that room
+# (judged against the comfort range, since station setpoints aren't linked).
+func _room_state(room_id: String) -> Dictionary:
+	if data.is_demo():
+		return sim.zone_state(room_id)
+	var temp := live_room_temp_c(room_id)
+	if is_nan(temp):
+		return {}
+	return {"temp_c": temp, "active_cool_setpoint_c": DemoSimulation.COMFORT_MAX_C, "active_heat_setpoint_c": DemoSimulation.COMFORT_MIN_C, "served": true, "mode": "live"}
+
+# The piece whose linked points include `ord`, or share its controller folder.
+func owner_of_point(ord: String) -> String:
+	var folder := ord.get_base_dir()
+	var fallback := ""
+	for item in model.objects:
+		for binding in item.get("properties", {}).get("bindings", {}).values():
+			var point := String(binding.get("point_id", ""))
+			if point.is_empty() or String(binding.get("source", "")) != "niagara": continue
+			if point == ord: return String(item.id)
+			if fallback.is_empty() and point.get_base_dir() == folder: fallback = String(item.id)
+	return fallback
+
+# A trend on a live station starts with the station's own history for the
+# chart's window (read through the SDK's history rollup), then samples live.
+func _backfill_history(point_id: String) -> void:
+	if not data.is_live():
+		return
+	var key := "%d|%s" % [data.live.get_instance_id(), point_id]
+	if _backfilled.has(key):
+		return
+	_backfilled[key] = true
+	var bias := history_time() - Time.get_unix_time_from_system()
+	data.live.history(point_id, 4.0, func(reply: Dictionary) -> void:
+		var samples: Array = []
+		for bucket in reply.get("buckets", []):
+			if bucket.get("avg") is float or bucket.get("avg") is int:
+				samples.append([float(bucket.t) / 1000.0 + bias, float(bucket.avg)])
+		if not samples.is_empty():
+			history.prepend(point_id, samples)
+			if is_instance_valid(hud): hud.card_trend.queue_redraw())
+
+func live_room_temp_c(room_id: String) -> float:
+	var owners: Array = []
+	for vav_id in topology.get("terminals", {}):
+		if String(topology.terminals[vav_id].get("zone_id", "")) == room_id: owners.append(String(vav_id))
+	for item in model.objects_of(["tstat"]):
+		if String(thermostat_room(String(item.id)).get("id", "")) == room_id: owners.append(String(item.id))
+	for owner in owners:
+		var binding: Dictionary = binding_for(String(owner), "space_temp")
+		if String(binding.get("source", "")) != "niagara": continue
+		var point: Dictionary = points.get_point(String(binding.get("point_id", "")))
+		if not (point.get("value") is float) or not (point.get("quality_flags", []) as Array).has("good"): continue
+		var unit := String(point.get("unit", "")).to_lower()
+		var value := float(point.value)
+		# Stations in the US mostly report °F; a value that only makes sense as °C is taken as °C.
+		if unit.contains("c") and not unit.contains("f"): return value
+		if unit.contains("f") or value > 45.0: return (value - 32.0) / 1.8
+		return value
+	return NAN
 
 func _overlay_material(state: Dictionary) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
@@ -933,6 +1057,32 @@ func action(label: String, glyph: String, callback: Callable) -> Dictionary:
 	return {"label": label, "glyph": glyph, "call": callback}
 
 func inspect(id: String) -> Dictionary:
+	var info := _inspect(id)
+	if not data.is_demo() and not info.is_empty():
+		info.trends = live_trends(id)
+	if job == null or info.is_empty():
+		return info
+	if not edit_block(edit_kind(id)).is_empty():
+		info.actions = (info.get("actions", []) as Array).filter(func(entry: Dictionary) -> bool: return String(entry.glyph) not in EDIT_GLYPHS)
+	if job.is_service_target(id):
+		(info.actions as Array).push_front(action("Service · test and repair", "build", func() -> void: hud.open_service(id)))
+	return info
+
+# Trend lines for a piece on a live station: its linked points, raw station units.
+func live_trends(id: String) -> Array:
+	var colors := [Color("f2a65a"), Color("73d398"), Color("6fb7ff"), Color("c9a2ff")]
+	var lines: Array = []
+	var item: Dictionary = model.find_object(id)
+	for role in PointMatcher.ROLES_BY_KIND.get(String(item.get("kind", "")), []):
+		var binding: Dictionary = binding_for(id, String(role))
+		if String(binding.get("source", "")) != "niagara" or lines.size() >= 3: continue
+		var entry := {"point_id": String(binding.point_id), "label": String(PointMatcher.ROLE_LABELS.get(role, role)), "color": colors[lines.size()]}
+		_backfill_history(String(binding.point_id))
+		if role != "space_temp": entry.merge({"own_axis": true, "min": float(binding.get("input_min", 0.0)), "max": float(binding.get("input_max", 100.0))})
+		lines.append(entry)
+	return lines
+
+func _inspect(id: String) -> Dictionary:
 	var item: Dictionary = model.find_object(id)
 	if item.is_empty():
 		return {}
@@ -951,7 +1101,7 @@ func inspect(id: String) -> Dictionary:
 			var room := index.room_at_cell(BuildingIndex.cell_of(item))
 			if room.is_empty():
 				return {"text": "Outdoor surface · not part of a closed room", "actions": [remove]}
-			return {"text": room_summary(room), "room": room, "trends": room_trends(String(room.id)), "actions": [action("Floor this room", "floor", func() -> void: start_tool("floor", {"finish": String(item.properties.get("finish", "oak"))})), remove]}
+			return {"title": String(room.label), "subtitle": "Room · %s floor" % describe(id), "text": room_summary(room), "room": room, "trends": room_trends(String(room.id)), "actions": [action("Floor this room", "floor", func() -> void: start_tool("floor", {"finish": String(item.properties.get("finish", "oak"))})), remove]}
 		"door":
 			return {"text": "Hinged door · walk into it to open\nR flips the swing", "actions": [action("Flip swing", "rotate", rotate_selected), move, remove]}
 		"window":
@@ -993,6 +1143,8 @@ func room_trends(room_id: String) -> Array:
 	return lines
 
 func rename_room(room_id: String, label: String) -> void:
+	if job != null:
+		return
 	var room := index.room_by_id(room_id)
 	var text := label.strip_edges()
 	if room.is_empty() or text.is_empty() or text == String(room.label):
@@ -1004,6 +1156,8 @@ func rename_room(room_id: String, label: String) -> void:
 	set_status("Room renamed to %s" % text)
 
 func set_room_type(room_id: String, type: String) -> void:
+	if _blocked("architecture"):
+		return
 	var room := index.room_by_id(room_id)
 	if room.is_empty():
 		return
@@ -1030,6 +1184,12 @@ func thermostat_info(id: String) -> Dictionary:
 	var anchor := vector(item.transform.position)
 	if room.is_empty():
 		return {"title": "Thermostat", "detail": "Hang it inside a closed room to control that room.", "anchor": anchor}
+	if not data.is_demo():
+		var reading := live_room_temp_c(String(room.id))
+		var live_detail := "%s · live from the station (read-only)" % String(room.label)
+		if is_nan(reading):
+			return {"title": "Thermostat · %s" % String(room.label), "detail": live_detail + "\nLink a room-temperature point to this thermostat or the room's VAV.", "anchor": anchor}
+		return {"title": "Thermostat · %s" % String(room.label), "temp_c": reading, "setpoint_c": NAN, "detail": live_detail, "anchor": anchor}
 	var state: Dictionary = sim.zone_state(String(room.id))
 	var detail := "%s · %s" % [String(room.label), String(state.get("mode", ""))]
 	if not bool(state.get("served", false)):
@@ -1044,6 +1204,9 @@ func thermostat_info(id: String) -> Dictionary:
 # `step_f` is in °F (the thermostat face); the simulation works in °C.
 func adjust_thermostat(id: String, step_f: float) -> bool:
 	if not data.is_demo():
+		return false
+	if job != null and job.phase not in ["onsite", "adjust", "design"]:
+		set_status("Not now: %s" % job.phase_text().to_lower())
 		return false
 	var room := thermostat_room(id)
 	if room.is_empty():
@@ -1060,7 +1223,7 @@ func adjust_thermostat(id: String, step_f: float) -> bool:
 
 func paint_object(id: String, role: String, colour: Color, same_kind: bool) -> void:
 	var target: Dictionary = model.find_object(id)
-	if target.is_empty():
+	if target.is_empty() or _blocked("architecture"):
 		return
 	var changes: Array = []
 	for item in model.objects:
@@ -1085,6 +1248,8 @@ func binding_description(id: String, role: String) -> String:
 
 func attach_binding(id: String, role: String, binding: Dictionary) -> void:
 	if demo_only and String(binding.get("source", "demo")) != "demo":
+		return
+	if _blocked("equipment"):
 		return
 	var item: Dictionary = model.find_object(id)
 	if item.is_empty() or String(binding.get("point_id", "")).is_empty():
@@ -1124,7 +1289,14 @@ func start_new_game(template: String, preserve: bool = true) -> void:
 	if tool != null:
 		finish_tool()
 	data.use_demo()
+	set_turbo(-1.0)
 	sim.reset()
+	sim.set_faults([])
+	sim.set_controls(DemoSimulation.DEFAULT_CONTROLS)
+	sim.running = true
+	sim.speed = 1.0
+	alarms.active.clear()
+	alarms.timers.clear()
 	model = Templates.create(template)
 	commands = BuildCommandStack.new(model)
 	selected_id = ""
@@ -1150,6 +1322,10 @@ func capture_save_state() -> void:
 	model.demo_checkpoint = sim.checkpoint()
 
 func save_project() -> void:
+	if job != null:
+		set_status("Career jobs aren't saved part-way: finish the job, or leave it from the job panel.")
+		play_sound("error")
+		return
 	capture_save_state()
 	var error := model.save_to(SAVE_PATH)
 	set_status("Saved · layout, equipment, paint and point bindings" if error == OK else "Save failed: " + error_string(error))
@@ -1157,6 +1333,7 @@ func save_project() -> void:
 	if error == OK and OS.has_feature("web"): browser_files.saved()
 
 func load_project() -> bool:
+	end_job()
 	var loaded := ProjectModel.new()
 	if not loaded.load_from(SAVE_PATH):
 		set_status("No saved build found.")
@@ -1184,6 +1361,8 @@ func import_browser_save(raw: String) -> void:
 	set_status("Backup opened · Save to keep it in this browser")
 
 func _adopt(loaded: ProjectModel) -> void:
+	end_job()
+	set_turbo(-1.0)
 	if tool != null:
 		finish_tool()
 	if demo_only:
@@ -1193,6 +1372,10 @@ func _adopt(loaded: ProjectModel) -> void:
 	selected_id = ""
 	data.use_demo()
 	sim.reset()
+	# Older saves carry no BAS programming: they get the defaults, not
+	# whatever the last building was running.
+	sim.set_controls(DemoSimulation.DEFAULT_CONTROLS)
+	sim.set_faults([])
 	explorer.reset_state()
 	explorer.open_doors = model.site.get("open_doors", {}).duplicate()
 	refresh_world()
@@ -1215,18 +1398,172 @@ func _use_demo_bindings(project: ProjectModel) -> void:
 func has_save() -> bool:
 	return FileAccess.file_exists(SAVE_PATH)
 
+# --- Career jobs ------------------------------------------------------------------------------
+
+func _edits_allowed(adds: Array, removes: Array, updates: Array) -> bool:
+	var kinds: Dictionary = {}
+	for entry in adds: kinds["equipment" if String(entry.get("kind", "")) in HvacCosts.HVAC_KINDS else "architecture"] = true
+	for entry in updates: kinds["equipment" if String(entry.get("kind", "")) in HvacCosts.HVAC_KINDS else "architecture"] = true
+	for id in removes: kinds[edit_kind(String(id))] = true
+	for kind in kinds:
+		if _blocked(String(kind)):
+			return false
+	return true
+
+func edit_kind(id: String) -> String:
+	return "equipment" if String(model.find_object(id).get("kind", "")) in HvacCosts.HVAC_KINDS else "architecture"
+
+# Why an edit isn't allowed right now ("" when it is). In a career job the
+# building is the client's; only an install job, while designing, lets you
+# change the HVAC.
+func edit_block(kind: String) -> String:
+	if job == null:
+		return ""
+	if kind == "architecture":
+		return "This is the client's building: walls, floors and furniture stay as they are."
+	if job.can_edit_equipment():
+		return ""
+	match job.type:
+		"service": return "On a service call you fix equipment in person: Tab to walk up to it, then E."
+		"tune": return "On a tune-up you change the BAS programming (job panel), not the equipment."
+	return "Stop the run to change the design."
+
+func _blocked(kind: String) -> bool:
+	var reason := edit_block(kind)
+	if reason.is_empty():
+		return false
+	set_status(reason)
+	play_sound("error")
+	return true
+
+func start_job(definition: Dictionary) -> void:
+	end_job()
+	start_new_game(String(definition.template), false)
+	if String(definition.type) == "install":
+		# The client's building, minus every piece of HVAC: that's the job.
+		var kept: Array[Dictionary] = []
+		for item in model.objects:
+			if String(item.kind) not in HvacCosts.HVAC_KINDS: kept.append(item)
+		model.objects = kept
+		model.rebuild_index()
+		commands = BuildCommandStack.new(model)
+		refresh_world()
+	job = JobSession.new(self, definition)
+	job.changed.connect(_on_job_changed)
+	job.begin()
+	if is_instance_valid(hud):
+		hud.job_started()
+	explorer.refresh()
+
+func _on_job_changed() -> void:
+	if is_instance_valid(hud):
+		hud.refresh_job()
+
+# Leaves the job; the building stays as a sandbox (its BAS programming too),
+# without the job's hidden faults.
+func end_job() -> void:
+	if job == null:
+		return
+	# A tampered thermostat nobody fixed goes back to normal with the faults.
+	for fault in job.faults:
+		if String(fault.kind) == "setpoint" and bool(fault.get("applied", false)) and not bool(fault.fixed):
+			sim.set_zone_setpoints(String(fault.target), JobSession.STANDARD_COOL_C, JobSession.STANDARD_HEAT_C)
+	job = null
+	set_turbo(-1.0)
+	sim.set_faults([])
+	sim.running = true
+	sim.speed = 1.0
+	if is_instance_valid(hud):
+		hud.job_started()
+		hud.refresh_simulation_controls()
+	explorer.refresh()
+	_card_refresh()
+
+func finish_job(result: Dictionary) -> void:
+	set_turbo(-1.0)
+	var stats: Dictionary = {}
+	var outcome := career.record(String(result.job_id), int(result.stars), float(result.pay), stats)
+	result.earned = float(outcome.earned)
+	result.new_stars = int(outcome.new_stars)
+	result.total_stars = career.total_stars()
+	result.money = career.money
+	play_sound("save" if int(result.stars) > 0 else "error")
+	session_ui.show_results(result)
+
+# A clean simulated day for a job: 06:30, the job's weather, default BAS
+# programming, no faults, no alarms.
+func reset_day(scenario: String) -> void:
+	set_turbo(-1.0)
+	history.mark_boundary("reset", sim.sim_seconds)
+	sim.reset()
+	sim.set_faults([])
+	sim.set_controls(DemoSimulation.DEFAULT_CONTROLS)
+	sim.set_scenario(scenario)
+	sim.running = true
+	sim.speed = 1.0
+	alarms.active.clear()
+	alarms.timers.clear()
+	_last_open_signature = ""
+	sync_openings()
+	points.replace_snapshot(data.provider.snapshot())
+	if is_instance_valid(hud):
+		hud.refresh_simulation_controls()
+
+func on_job_phase() -> void:
+	# Whatever was open for editing closes when the job stops allowing it.
+	if job != null and not job.can_edit_equipment():
+		if tool != null and tool.id != "select":
+			finish_tool()
+		var bench: Control = equipment.workbench
+		if is_instance_valid(bench) and bench.visible:
+			bench.close()
+	if is_instance_valid(hud):
+		hud.refresh_job()
+		hud.refresh_simulation_controls()
+		hud.refresh_mode()
+	explorer.refresh()
+	_card_refresh()
+
+func _card_refresh() -> void:
+	if is_instance_valid(hud):
+		hud._card_cache = ""
+		hud.refresh_card()
+
+func room_by_label(label: String) -> Dictionary:
+	for room in index.rooms:
+		if String(room.label) == label:
+			return room
+	return {}
+
+func thermostat_in(room_id: String) -> String:
+	for item in model.objects_of(["tstat"]):
+		if String(thermostat_room(String(item.id)).get("id", "")) == room_id:
+			return String(item.id)
+	return ""
+
 # --- Simulation controls ----------------------------------------------------------------------
 
 func set_speed(value: float) -> void:
+	if job != null and (job.phase != "onsite" or turbo_until > sim.sim_seconds):
+		set_status("The job sets the clock right now: %s" % job.phase_text().to_lower())
+		hud.refresh_simulation_controls()
+		return
 	sim.running = value > 0.0
 	if value > 0.0: sim.speed = value
 	hud.refresh_simulation_controls()
 
 func set_scenario(value: String) -> void:
+	if job != null:
+		set_status("The weather is part of the job.")
+		hud.refresh_simulation_controls()
+		return
 	sim.set_scenario(value)
 	set_status("Scenario · %s" % value)
 
 func reset_simulation() -> void:
+	if job != null:
+		set_status("The job sets the clock.")
+		return
 	history.mark_boundary("reset", sim.sim_seconds)
 	var scenario := sim.scenario
 	sim.reset()

@@ -94,7 +94,8 @@ class Seeder:
 		units[name] = item
 
 	func _size_units() -> void:
-		# Air handlers are sized to the terminals they serve, with diversity.
+		# Air handlers are sized to the terminals they serve, with a little
+		# diversity (not every room peaks at once).
 		var totals: Dictionary = {}
 		var network := RouteNetwork.evaluate(model.objects)
 		for vav_id in network.get("terminals", {}):
@@ -104,7 +105,7 @@ class Seeder:
 			totals[source] = float(totals.get(source, 0.0)) + float(terminal.get("capacity_m3_s", 0.4))
 		for name in units:
 			var item: Dictionary = units[name]
-			item.properties.capacity_m3_s = snappedf(maxf(0.6, float(totals.get(String(item.id), 1.0)) * 0.85), 0.05)
+			item.properties.capacity_m3_s = snappedf(maxf(0.6, float(totals.get(String(item.id), 1.0)) * 0.95), 0.05)
 
 	# --- Trunks ----------------------------------------------------------------------------
 

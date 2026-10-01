@@ -1,7 +1,7 @@
 extends Node3D
 
 # Explore mode: a minifigure walks the building. Interactions are proximity
-# based and shown in the world — a floating key prompt over whatever you face.
+# based: the HUD shows a key prompt beside whatever you face.
 # Doors swing away from you as you walk into them and close behind you;
 # E uses things (doors, chairs, thermostats, equipment access doors).
 
@@ -27,7 +27,6 @@ var drag_button := MOUSE_BUTTON_NONE
 var drag_travel := 0.0
 var interactables: Array[Dictionary] = []
 var target: Dictionary = {}
-var prompt: Label3D
 var open_doors: Dictionary = {}     # door id -> bool (player's explicit/automatic state)
 var door_auto: Dictionary = {}      # door id -> seconds since the player left (auto-opened doors)
 var door_angles: Dictionary = {}    # door id -> current swing angle
@@ -63,19 +62,6 @@ func setup(owner: Node) -> void:
 	camera.near = 0.2
 	camera.far = 800.0
 	add_child(camera)
-	prompt = Label3D.new()
-	prompt.name = "Interaction prompt"
-	prompt.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	prompt.no_depth_test = true
-	prompt.fixed_size = true
-	prompt.pixel_size = 0.0011
-	prompt.font_size = 34
-	prompt.outline_size = 12
-	prompt.modulate = Color("fff4d2")
-	prompt.outline_modulate = Color(0.1, 0.13, 0.15, 0.95)
-	prompt.render_priority = 5
-	prompt.visible = false
-	add_child(prompt)
 	set_physics_process(true)
 
 func reset_state() -> void:
@@ -91,10 +77,45 @@ func reset_player() -> void:
 	player.velocity = Vector3.ZERO
 	_focus = player.global_position
 
+# Puts the minifigure on a clear spot near `target` (a service call's
+# "walk over"), preferring the room the target is in, facing it.
+func teleport_near(target: Vector3) -> bool:
+	var room: Dictionary = game.index.room_at(Vector3(target.x, 0.0, target.z))
+	var space := get_world_3d().direct_space_state
+	var shape := CapsuleShape3D.new()
+	shape.radius = 0.38
+	shape.height = 2.2
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = shape
+	query.collision_mask = 1
+	query.exclude = [player.get_rid()]
+	var best := Vector3.INF
+	var best_score := INF
+	for radius in [1.3, 1.9, 2.5, 3.1]:
+		for step in range(12):
+			var angle := TAU * float(step) / 12.0
+			var point := Vector3(target.x + cos(angle) * radius, PlanGrid.FLOOR_TOP + 0.08, target.z + sin(angle) * radius)
+			var here: Dictionary = game.index.room_at(point)
+			var score: float = float(radius) + (0.0 if String(here.get("id", "")) == String(room.get("id", "")) else 4.0)
+			if score >= best_score: continue
+			query.transform = Transform3D(Basis(), point + Vector3(0, 1.15, 0))
+			if not space.intersect_shape(query, 1).is_empty(): continue
+			best = point
+			best_score = score
+	if best == Vector3.INF: return false
+	seated = {}
+	figure.sit(false)
+	player.global_position = best
+	player.velocity = Vector3.ZERO
+	figure.rotation.y = atan2(-(target.x - best.x), -(target.z - best.z))
+	goal_yaw = figure.rotation.y + PI
+	_focus = best + Vector3(0, 1.3, 0)
+	return true
+
 func activate(on: bool) -> void:
 	active = on
 	player.visible = on
-	prompt.visible = false
+	game.hud.hide_prompt()
 	if on:
 		seated = {}
 		figure.sit(false)
@@ -137,10 +158,17 @@ func refresh() -> void:
 		var center := PlanGrid.edge_center(String(door.edge)) + Vector3(0, 1.0, 0)
 		interactables.append({"id": String(door_id), "kind": "door", "position": center, "edge": String(door.edge)})
 	for item in game.model.objects:
-		if item.kind == "tstat":
+		if item.kind == "tstat" and (game.job == null or game.job.type != "service"):
 			interactables.append({"id": String(item.id), "kind": "tstat", "position": game.vector(item.transform.position)})
 	for seat in game.furniture_seats():
 		interactables.append(seat)
+	if game.job != null and game.job.type == "service":
+		# Service calls: every air handler, VAV and thermostat can be worked on.
+		for item in game.model.objects:
+			if String(item.kind) not in ["ahu", "vav", "tstat"]: continue
+			var owner := String(item.id)
+			var at: Vector3 = game.vector(item.transform.position) + (Vector3(0, 1.0, 0) if item.kind == "ahu" else Vector3.ZERO)
+			interactables.append({"id": owner, "kind": "service", "position": at, "action": func() -> void: game.hud.open_service(owner)})
 	for entry in game.equipment.interactables():
 		interactables.append(entry)
 	# Doors that no longer exist forget their state.
@@ -372,26 +400,25 @@ func _update_target() -> void:
 		target = best
 		game.set_hover(String(target.get("id", "")))
 	if target.is_empty() or not seated.is_empty():
-		prompt.visible = false
+		game.hud.hide_prompt()
 		return
-	prompt.visible = true
-	prompt.text = "E  %s" % _prompt_text(target)
-	if String(target.kind) == "equipment":
-		var live: String = game.equipment.short_readout(String(target.id))
-		if not live.is_empty(): prompt.text += "\n" + live
+	var detail := ""
+	if String(target.kind) in ["equipment", "service"]:
+		detail = game.equipment.short_readout(String(target.id))
 	elif String(target.kind) == "tstat":
 		var info: Dictionary = game.thermostat_info(String(target.id))
-		if info.has("temp_c"): prompt.text += "\n%s · set %s" % [Units.temp(float(info.temp_c), 1), Units.temp(float(info.setpoint_c))]
+		if info.has("temp_c"): detail = "%s · set %s" % [Units.temp(float(info.temp_c), 1), Units.temp(float(info.setpoint_c))]
 	var anchor: Vector3 = target.position
-	# Ceiling equipment gets its prompt just below it, everything else above.
-	var lift := 0.7 if target.kind == "tstat" else (-0.6 if anchor.y > 3.0 else 1.4)
-	prompt.global_position = anchor + Vector3(0, lift, 0)
+	# Ceiling equipment gets its prompt just below it, everything else beside it.
+	var lift := 0.4 if target.kind == "tstat" or (target.kind == "service" and anchor.y < 2.5 and anchor.y > 1.0) else (-0.4 if anchor.y > 3.0 else 0.9)
+	game.hud.show_prompt(_prompt_text(target), detail, anchor + Vector3(0, lift, 0))
 
 func _prompt_text(entry: Dictionary) -> String:
 	match String(entry.kind):
 		"door": return "Close door" if bool(open_doors.get(entry.id, false)) else "Open door"
 		"tstat": return "Adjust thermostat"
 		"seat": return "Sit"
+		"service": return "Service %s" % game.describe(String(entry.id))
 		"equipment":
 			if entry.has("access_key"):
 				var text := String(entry.prompt).trim_prefix("Open ")

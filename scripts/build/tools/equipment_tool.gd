@@ -50,7 +50,7 @@ func _label_ports(body: Node3D) -> void:
 	var library := Placement.equipment_models()
 	if library == null:
 		return
-	var names := {"ahu": {"inlet": "Outside air in", "outlet": "Supply air out ▶"}, "vav": {"inlet": "Supply in", "outlet": "To diffusers ▶"}, "diffuser": {"inlet": "Duct in"}}
+	var names := {"ahu": {"inlet": "Outside air in", "outlet": "Supply air out »"}, "vav": {"inlet": "Supply in", "outlet": "To diffusers »"}, "diffuser": {"inlet": "Duct in"}}
 	for port_name in library.port_names(kind):
 		var local: Dictionary = library.port_local(kind, properties, port_name)
 		var tag := Label3D.new()

@@ -1,0 +1,22 @@
+{
+  "name": "@basidekick/baskstream",
+  "version": "0.1.0",
+  "description": "TypeScript client for the baskStream Niagara 4 WebSocket API: login, requests, live subscriptions and reconnects.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@msgpack/msgpack": "^3.1.2",
+    "ws": "^8.18.3"
+  }
+}

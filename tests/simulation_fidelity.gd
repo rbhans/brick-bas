@@ -17,7 +17,8 @@ func _init() -> void:
 		test_sensor_bias, test_data_interruption, test_conservation_all_day, test_reconfigure, test_unconditioned_zone,
 		test_unoccupied_and_night_cycle, test_installed_components_only, test_lights, test_point_contract,
 		test_accessors_and_snapshot, test_full_days_bounded, test_speed_equivalence, test_checkpoint_restore,
-		test_determinism, test_performance]
+		test_determinism, test_controls_validation, test_controls_sequences, test_schedule_and_people,
+		test_targeted_faults, test_targeted_fault_alarms, test_meters, test_wasteful_programming, test_time_lapse, test_performance]
 	for test in tests:
 		var t0 := Time.get_ticks_msec()
 		test.call()
@@ -155,7 +156,7 @@ func test_blank_and_junk_topology() -> void:
 	sim.configure({})
 	sim.step_for_test(3600)
 	var pts: Array = sim.snapshot_points()
-	expect(pts.size() == 4 and sim.zone_ids().is_empty() and sim.unit_ids().is_empty() and sim.terminal_ids().is_empty(), "blank canvas: only site points, no equipment")
+	expect(pts.size() == 6 and sim.zone_ids().is_empty() and sim.unit_ids().is_empty() and sim.terminal_ids().is_empty(), "blank canvas: only site points, no equipment")
 	expect(value(sim, "site.time_of_day") is float and is_equal_approx(float(value(sim, "site.time_of_day")), 7.5), "blank canvas: clock still runs (06:30 + 1 h)")
 	expect(sim.zone_state("nope").is_empty() and sim.unit_state("nope").is_empty() and sim.terminal_state("nope").is_empty(), "unknown ids return empty state")
 	sim.set_zone_setpoints("nope", 22.0)
@@ -228,7 +229,8 @@ func test_cooling_day() -> void:
 	expect(not bool(u.economizer), "economizer locked out above the 21 °C high limit")
 	expect(absf(float(u.duct_pressure_pa) - float(u.duct_pressure_setpoint_pa)) < 40.0, "duct static near its (reset) setpoint")
 	expect(float(u.return_temp_c) > 22.0 and float(u.return_temp_c) < 25.0, "return air near space temperature plus plenum gain")
-	expect(float(u.mixed_temp_c) > float(u.return_temp_c), "hot outdoor air warms the mixed air")
+	var oat := float(sim.weather().outdoor_temp_c)
+	expect(float(u.mixed_temp_c) >= minf(oat, float(u.return_temp_c)) - 0.15 and float(u.mixed_temp_c) <= maxf(oat, float(u.return_temp_c)) + 0.15, "mixed air lies between outdoor and return air (%.2f: OAT %.2f, RAT %.2f)" % [u.mixed_temp_c, oat, u.return_temp_c])
 	expect(float(sim.terminals.vav_a.reheat_output) == 0.0, "no reheat while cooling")
 	expect(float(sim.zone_state("class_a").co2_ppm) > 600.0 and float(sim.zone_state("class_a").co2_ppm) < 1500.0, "occupied classroom CO2 is plausible (%.0f ppm)" % sim.zone_state("class_a").co2_ppm)
 	expect(audit(sim, topo) == "", "cooling day conserves flow")
@@ -548,7 +550,7 @@ func test_reconfigure() -> void:
 	expect(points(sim).has("vav_c.space_temp") and not sim.zone_ids().has("") and float(sim.terminals.vav_c.flow_actual_m3_s) > 0.0, "roomless VAV still simulates airflow")
 	expect(finite_points(sim) == "" and audit(sim, loose) == "", "roomless VAV stays consistent")
 	sim.configure({})
-	expect(sim.snapshot_points().size() == 4, "clearing the building removes everything")
+	expect(sim.snapshot_points().size() == 6, "clearing the building removes everything")
 
 func test_unconditioned_zone() -> void:
 	var topo := wing()
@@ -875,3 +877,212 @@ func test_performance() -> void:
 		var z: Dictionary = sim.zone_state(id)
 		if absf(float(z.true_temp_c) - 23.0) < 1.5: served += 1
 	expect(served >= 30, "large building mostly at setpoint by 09:10 (%d of 40)" % served)
+
+# ---------------------------------------------------------------- BAS programming, targeted faults, meters
+
+func test_controls_validation() -> void:
+	var sim := make(wing())
+	expect(sim.controls_state() == Sim.DEFAULT_CONTROLS, "controls start at the documented defaults")
+	sim.set_controls({"occupied_start_h": -5.0, "occupied_end_h": 99.0, "sat_fixed_c": 3.0, "static_fixed_pa": 9000.0, "vav_min_fraction": 2.0, "economizer": "no", "junk": 1, "dcv": false})
+	var c: Dictionary = sim.controls_state()
+	expect(float(c.occupied_start_h) == 0.0 and float(c.occupied_end_h) == 24.0 and float(c.sat_fixed_c) == 10.0 and float(c.static_fixed_pa) == 500.0, "numeric controls are clamped")
+	expect(float(c.vav_min_fraction) == 0.8 and bool(c.economizer) and not bool(c.dcv) and not c.has("junk"), "booleans need bools, unknown keys ignored")
+	sim.set_controls({"occupied_start_h": 12.0, "occupied_end_h": 9.0})
+	c = sim.controls_state()
+	expect(float(c.occupied_end_h) >= float(c.occupied_start_h) + 0.5, "schedule always at least 30 min long (%.1f-%.1f)" % [c.occupied_start_h, c.occupied_end_h])
+	sim.set_controls({"occupied_start_h": NAN, "sat_fixed_c": INF})
+	expect(float(sim.controls_state().occupied_start_h) == float(c.occupied_start_h), "non-finite values ignored")
+	var state: Dictionary = sim.checkpoint()
+	var copy := make(wing())
+	copy.restore_checkpoint(JSON.parse_string(JSON.stringify(state)))
+	expect(copy.controls_state() == sim.controls_state(), "controls survive a checkpoint")
+
+func test_controls_sequences() -> void:
+	# Economizer off on a mild day: no free cooling, the chilled-water valve works instead.
+	var econ := make(wing(), "Economizer day")
+	var mech := make(wing(), "Economizer day")
+	mech.set_controls({"economizer": false})
+	run_to(econ, 10.5)
+	run_to(mech, 10.5)
+	expect(bool(econ.unit_state("ahu_1").economizer) and not bool(mech.unit_state("ahu_1").economizer), "economizer enable follows the setting")
+	expect(float(mech.units.ahu_1.damper_feedback) <= Sim.DCV_MAX_POSITION + 0.01 and float(mech.units.ahu_1.cooling_output) > float(econ.units.ahu_1.cooling_output) + 0.05, "without it the OA damper stays at minimum and the cooling valve opens (%.2f vs %.2f)" % [mech.units.ahu_1.cooling_output, econ.units.ahu_1.cooling_output])
+	# SAT reset off: a fixed supply setpoint.
+	var fixed := make(wing())
+	fixed.set_controls({"sat_reset": false, "sat_fixed_c": 14.0})
+	run_to(fixed, 9.0)
+	expect(absf(float(fixed.units.ahu_1.sat_sp_c) - 14.0) < 1.0e-9, "SAT setpoint held at the fixed value (%.2f)" % fixed.units.ahu_1.sat_sp_c)
+	# Static reset off: a fixed duct static setpoint the fan chases.
+	var stat := make(wing())
+	stat.set_controls({"static_reset": false, "static_fixed_pa": 400.0})
+	run_to(stat, 10.0)
+	expect(absf(float(stat.units.ahu_1.static_sp_pa) - 400.0) < 1.0e-9 and absf(float(stat.units.ahu_1.duct_pressure_pa) - 400.0) < 40.0, "fan holds the fixed static (%.0f Pa)" % stat.units.ahu_1.duct_pressure_pa)
+	# DCV off: design minimum outdoor air whatever the CO2.
+	var dcv := make(wing(), "Hot afternoon")
+	dcv.set_controls({"dcv": false})
+	run_to(dcv, 8.0)
+	expect(absf(float(dcv.units.ahu_1.damper_command) - Sim.DCV_OFF_POSITION) < 1.0e-6, "without DCV the OA damper holds its design minimum (%.2f)" % dcv.units.ahu_1.damper_command)
+	# VAV minimum airflow.
+	var vmin := make(wing())
+	vmin.set_controls({"vav_min_fraction": 0.5})
+	run_to(vmin, 7.25)
+	expect(absf(float(vmin.terminal_state("vav_a").min_airflow_m3_s) - 0.225) < 1.0e-6, "occupied VAV minimum follows the setting (%.3f)" % vmin.terminal_state("vav_a").min_airflow_m3_s)
+	run_to(vmin, 10.0)
+	expect(audit(vmin, wing()) == "" and audit(stat, wing()) == "" and audit(mech, wing()) == "", "flows stay conserved under every setting")
+
+func test_schedule_and_people() -> void:
+	# A late HVAC schedule: people arrive at 07:00 anyway.
+	var late := make(wing(), "Hot afternoon")
+	late.set_controls({"occupied_start_h": 9.0, "optimal_start": false})
+	run_to(late, 8.0)
+	var weather: Dictionary = late.weather()
+	expect(bool(weather.people_present) and not bool(weather.occupied), "people present before the HVAC schedule starts")
+	expect(String(late.units.ahu_1.mode) == "Off" and float(late.zone_state("class_a").occupants) > 1.0, "AHU off while classes are in")
+	var on_time := make(wing(), "Hot afternoon")
+	run_to(on_time, 8.75)
+	run_to(late, 8.75)
+	expect(float(late.zone_state("class_a").true_temp_c) > float(on_time.zone_state("class_a").true_temp_c) + 0.8, "the late start leaves rooms warm (%.1f vs %.1f)" % [late.zone_state("class_a").true_temp_c, on_time.zone_state("class_a").true_temp_c])
+	run_to(late, 9.5)
+	expect(String(late.units.ahu_1.mode) == "Occupied", "AHU starts on its schedule")
+	# Optimal start follows the schedule's start time.
+	var early := make(wing(), "Cold morning")
+	early.set_controls({"occupied_start_h": 9.0})
+	run_to(early, 7.5)
+	expect(String(early.units.ahu_1.mode) == "Warm-up", "optimal start moves with the schedule (%s at 07:30)" % early.units.ahu_1.mode)
+	# A 24/7 schedule keeps the fan running at night.
+	var always := make(wing())
+	always.set_controls({"occupied_start_h": 0.0, "occupied_end_h": 24.0})
+	run_to(always, 22.0)
+	expect(String(always.units.ahu_1.mode) == "Occupied" and not bool(always.weather().people_present), "24/7 schedule runs after people leave")
+
+func test_targeted_faults() -> void:
+	var topo := wing()
+	var sim := make(topo)
+	sim.set_faults([{"kind": "stuck_damper", "target": "vav_b", "value": 0.1}, {"kind": "stuck_damper", "target": "vav_b", "value": 0.9},
+		{"kind": "nope", "target": "vav_a"}, {"kind": "fan_failure", "target": ""}, "junk", {"kind": "sensor_bias", "target": "class_a", "value": -40.0},
+		{"kind": "reheat_stuck", "target": "vav_a", "value": 7.0}])
+	var listed: Array = sim.faults()
+	expect(listed.size() == 3, "invalid and duplicate faults dropped (%d kept)" % listed.size())
+	expect(float(listed[0].value) == 0.1 and float(listed[1].value) == -6.0 and float(listed[2].value) == 1.0, "fault values clamped")
+	run_to(sim, 10.0)
+	expect(float(sim.terminals.vav_b.damper_feedback) == 0.1 and bool(sim.terminal_state("vav_b").stuck) and not bool(sim.terminal_state("vav_a").stuck), "targeted damper frozen at its value")
+	expect(String(sim.fault_targets().stuck_damper) == "", "no scenario fault involved")
+	var z: Dictionary = sim.zone_state("class_a")
+	expect(absf(float(z.temp_c) - float(z.true_temp_c) + 6.0) < 0.05, "sensor bias aimed at one zone (%.2f vs %.2f)" % [z.temp_c, z.true_temp_c])
+	expect(float(sim.terminals.vav_a.reheat_output) == 1.0 and bool(sim.terminal_state("vav_a").reheat_stuck), "reheat valve frozen open")
+	expect(audit(sim, topo) == "", "faulted building conserves flow")
+	# Repairs.
+	expect(sim.clear_fault("vav_b", "stuck_damper") and not sim.clear_fault("vav_b", "stuck_damper"), "clear_fault reports what it removed")
+	sim.step_for_test(240)
+	expect(float(sim.terminals.vav_b.damper_feedback) != 0.1 and absf(float(sim.terminals.vav_b.damper_feedback) - float(sim.terminals.vav_b.damper_command)) < 0.05, "repaired damper follows its command again")
+	sim.clear_fault("vav_a")
+	sim.clear_fault("class_a")
+	sim.step_for_test(60)
+	z = sim.zone_state("class_a")
+	expect(sim.faults().is_empty() and absf(float(z.temp_c) - float(z.true_temp_c)) < 0.05, "every fault cleared")
+	# A fault aimed at equipment that does not exist yet waits for it.
+	var later := make(topo)
+	later.set_faults([{"kind": "fan_failure", "target": "ahu_9"}])
+	var bigger := topo.duplicate(true)
+	bigger.units["ahu_9"] = {"label": "AHU-9", "capacity_m3_s": 0.5, "layout": ["damper", "filter", "cooling_coil", "heating_coil", "fan"]}
+	later.configure(bigger)
+	expect(bool(later.units.ahu_9.fan_fault) and not bool(later.units.ahu_1.fan_fault), "fault applies once its target is configured")
+	var copy := make(bigger)
+	copy.restore_checkpoint(JSON.parse_string(JSON.stringify(later.checkpoint())))
+	expect(copy.faults() == later.faults() and bool(copy.units.ahu_9.fan_fault), "faults survive a checkpoint")
+	# Cold morning with the reheat valve stuck shut: the room cannot warm up.
+	var cold := make(topo, "Cold morning")
+	var stuck := make(topo, "Cold morning")
+	stuck.set_faults([{"kind": "reheat_stuck", "target": "vav_a", "value": 0.0}])
+	run_to(cold, 9.0)
+	run_to(stuck, 9.0)
+	var t: Dictionary = stuck.terminal_state("vav_a")
+	expect(float(t.reheat_command) > 0.3 and float(t.reheat_output) == 0.0, "controller asks for reheat the valve cannot give (%.2f)" % t.reheat_command)
+	expect(float(stuck.zone_state("class_a").true_temp_c) < float(cold.zone_state("class_a").true_temp_c) - 0.5, "room stays cold (%.1f vs %.1f)" % [stuck.zone_state("class_a").true_temp_c, cold.zone_state("class_a").true_temp_c])
+
+func test_targeted_fault_alarms() -> void:
+	# Chilled-water valve stuck shut on a hot day: SAT climbs, the alarm follows.
+	var topo := wing()
+	var sim := make(topo, "Hot afternoon")
+	var alarms := Alarms.new()
+	run_to(sim, 11.0)
+	sim.set_faults([{"kind": "chw_valve_stuck", "target": "ahu_1", "value": 0.0}])
+	for i in range(90):
+		sim.step_for_test(10)
+		alarms.evaluate(sim, 10.0)
+	var u: Dictionary = sim.unit_state("ahu_1")
+	expect(float(u.cooling_output) == 0.0 and float(u.cooling_command) > 0.9, "valve stays shut while the loop calls for cooling")
+	expect(float(u.supply_temp_c) > float(u.supply_setpoint_c) + 4.0, "supply air runs warm (%.1f vs %.1f)" % [u.supply_temp_c, u.supply_setpoint_c])
+	expect(alarms.active.has("sat_high:ahu_1"), "supply-air-temperature-high alarm")
+	# Outdoor-air damper stuck wide open on a hot day: more cooling load.
+	var normal := make(topo, "Hot afternoon")
+	var open := make(topo, "Hot afternoon")
+	open.set_faults([{"kind": "oa_damper_stuck", "target": "ahu_1", "value": 1.0}])
+	run_to(normal, 14.0)
+	run_to(open, 14.0)
+	expect(float(open.units.ahu_1.oa_fraction) == 1.0 and float(open.units.ahu_1.cooling_w) > float(normal.units.ahu_1.cooling_w) * 1.15, "100%% outdoor air raises the cooling load (%.0f vs %.0f W)" % [open.units.ahu_1.cooling_w, normal.units.ahu_1.cooling_w])
+	var quiet := make(topo)
+	var none := Alarms.new()
+	run_to(quiet, 9.0)
+	for i in range(120):
+		quiet.step_for_test(30)
+		none.evaluate(quiet, 30.0)
+	expect(none.list().is_empty(), "no SAT alarm on a normal day (%s)" % str(none.list()))
+
+func test_meters() -> void:
+	var topo := wing()
+	var sim := make(topo)
+	run_to(sim, 7.0)
+	sim.reset_meters()
+	expect(float(sim.energy().cost_usd) == 0.0 and sim.comfort().zones.is_empty(), "meters start at zero")
+	run_to(sim, 18.0)
+	var e: Dictionary = sim.energy()
+	var c: Dictionary = sim.comfort(["class_a", "class_b"])
+	expect(absf(float(e.hours) - 11.0) < 0.01 and float(e.electric_kwh) > 1.0 and float(e.cost_usd) > 0.0 and float(e.peak_kw) > 0.0, "an occupied day uses energy (%.1f kWh, $%.2f)" % [e.electric_kwh, e.cost_usd])
+	expect(absf(float(e.electric_kwh) - float(e.fan_kwh) - float(e.cooling_kwh)) < 1.0e-6, "electricity = fans + chilled water / COP")
+	expect(absf(float(c.occupied_h) - 22.0) < 0.05 and absf(float(c.zones.class_a.occupied_h) - 11.0) < 0.01, "comfort counts the hours people are in (%.2f)" % c.occupied_h)
+	expect(float(c.setpoint_pct) > 85.0 and float(c.range_pct) > 85.0, "a healthy building is comfortable (%.0f %% / %.0f %%)" % [c.setpoint_pct, c.range_pct])
+	expect(not sim.comfort().zones.has("corridor") or float(sim.comfort().zones.corridor.occupied_h) > 0.0, "comfort zones are rooms with people")
+	var p := points(sim)
+	expect(p.has("site.electric_power") and p.has("site.energy_cost") and absf(float(p["site.energy_cost"].value) - float(e.cost_usd)) < 1.0e-9, "site energy points published")
+	var copy := make(topo)
+	copy.restore_checkpoint(JSON.parse_string(JSON.stringify(sim.checkpoint())))
+	expect(absf(float(copy.energy().cost_usd) - float(e.cost_usd)) < 1.0e-6 and absf(float(copy.comfort(["class_a", "class_b"]).setpoint_pct) - float(c.setpoint_pct)) < 1.0e-6, "meters survive a checkpoint")
+	# A dead fan ruins comfort.
+	var broken := make(topo, "Hot afternoon")
+	broken.set_faults([{"kind": "fan_failure", "target": "ahu_1"}])
+	run_to(broken, 7.0)
+	broken.reset_meters()
+	run_to(broken, 18.0)
+	var bc: Dictionary = broken.comfort(["class_a", "class_b"])
+	expect(float(bc.setpoint_pct) < 40.0 and float(bc.zones.class_a.warm_kh) > 5.0, "no airflow, no comfort (%.0f %%, %.1f K·h warm)" % [bc.setpoint_pct, bc.zones.class_a.warm_kh])
+	expect(float(broken.energy().fan_kwh) == 0.0, "a failed fan uses no fan energy")
+
+func test_wasteful_programming() -> void:
+	# The tune-up jobs rely on bad programming costing real money.
+	var good := make(lobby_wing(), "Economizer day")
+	var bad := make(lobby_wing(), "Economizer day")
+	bad.set_controls({"occupied_start_h": 4.0, "occupied_end_h": 22.0, "sat_reset": false, "sat_fixed_c": 12.8, "static_reset": false, "static_fixed_pa": 400.0, "economizer": false, "dcv": false, "vav_min_fraction": 0.6})
+	for sim in [good, bad]:
+		run_to(sim, 0.0)
+		sim.reset_meters()
+		sim.step_for_test(86400)
+	var cost_good := float(good.energy().cost_usd)
+	var cost_bad := float(bad.energy().cost_usd)
+	expect(cost_bad > cost_good * 1.35, "wasteful programming costs much more ($%.2f vs $%.2f)" % [cost_bad, cost_good])
+	var zones := ["class_a", "class_b", "lobby"]
+	expect(float(good.comfort(zones).range_pct) > 90.0, "good programming stays comfortable (%.0f %%)" % good.comfort(zones).range_pct)
+
+func test_time_lapse() -> void:
+	var a := make(wing())
+	var b := make(wing())
+	a.speed = Sim.MAX_SPEED
+	var steps := 0
+	for frame in range(120): steps += a.advance(1.0 / 60.0)
+	b.step_for_test(steps)
+	expect(steps == 3600 and state_equal(a, b), "time-lapse at %.0f× matches fixed steps (%d steps)" % [Sim.MAX_SPEED, steps])
+	a.speed = 1.0e9
+	expect(a.advance(1.0) == int(Sim.MAX_SPEED) and a.advance(10.0) == Sim.MAX_STEPS_PER_ADVANCE and float(a.accumulator) < 1.0, "speed capped and backlog bounded")
+	expect(float(a.checkpoint().speed) <= Sim.SAVED_SPEED_MAX, "time-lapse speed is not saved")
+	var day := make(wing())
+	day.set_time_of_day(9.0 * 3600.0)
+	expect(String(day.weather().clock) == "09:00" and bool(day.weather().occupied), "set_time_of_day jumps the clock")

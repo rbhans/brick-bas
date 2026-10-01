@@ -1,6 +1,65 @@
 # BRICK / BAS progress
 
-Updated: 2026-09-26
+Updated: 2026-10-01
+
+## Current: UI execution pass (2026-10-01)
+
+Same toy-builder identity (charcoal cards, cream parts tray, yellow selection, red brand brick), built properly on one design system: `scripts/ui/toy_theme.gd` holds the palette, type scale, radii and every button, field, tab, list, scrollbar and dialog style, and all panels take their values from it.
+
+- **Type**: Geist (OFL, bundled) on desktop and web, at fixed weights through the font's `wght` axis. The axis has to be keyed by its numeric tag: a `"wght"` string key is silently ignored.
+- **Layout** (1440 × 900, 24 px margins): brand, mode tabs and actions on top. A single tool rail on the left: tools, a divider, then view toggles with a ring rather than a fill, so only the active tool is solid yellow. Clock card, a centred tray that no longer overlaps it or shows a scrollbar, and data and alarm pills bottom right. A status toast fades out under the mode tabs.
+- **Context card**: the room's name as its title (it showed the floor finish), a subtitle, a Details button, and labelled two-column action chips (Delete in red) instead of bare icons.
+- **Explore**: the use prompt is a 2D card with an E keycap beside what you face, replacing the large floating 3D label. Key hints are keycaps.
+- **Panels**: the menu, alarms (sizes to its rows; a friendly empty state; separate show and acknowledge buttons), thermostat, details (labelled fields, a swatch grid that marks the current colour), BAS programming (aligned form rows), the service panel (tests and repairs with their time and cost aligned right), the job panel, the workbench and the tour all share the same header, section and footer patterns. Each has one yellow primary action.
+- **Pages**: the title screen, Creative starters, job board (standing, rank progress, job cards), briefing and results were rebuilt as one card per page, with an eyebrow, a heading, the content, and a footer of actions.
+- **Trends**: fit the window to the history they have (no sliver at game start), with the scale in a gutter and wrapping legends.
+- `tools/ui_screens.gd` (was `career_screens.gd`) captures 13 Creative states as well as the career and live sets. The font license ships with the web build as `Font-LICENSE.txt`.
+
+Verification (2026-10-01): all suites pass on the final code (unit 180, build tools 32, explore 26, browser saves 36, geometry 3, live station 30, career 295, simulation fidelity 291, bridge 8). Every Creative, career and live state was re-rendered with `tools/ui_screens.gd` and compared with the pre-pass captures. The web export packs Geist. In the in-app browser the title screen, starters, HUD, tour and Explore prompt render with the bundled font and no console errors. Not checked: Safari and Firefox, and a touch screen.
+
+## Current: Career mode, live station data, simulation upgrades (2026-10-01)
+
+The sandbox is now a game with two modes. **Creative** is the existing sandbox, on simulated or (desktop) live station data. **Career** is a contracting business with three kinds of work. Design: [docs/CAREER.md](docs/CAREER.md). Live data: [docs/LIVE_DATA.md](docs/LIVE_DATA.md).
+
+- **Career**: a job board of ten contracts in three tiers, plus endless on-call service calls.
+  - *Install*: an empty-of-HVAC building to design on a budget and commission over a time-lapsed day.
+  - *Service call*: hidden faults that start during the morning, comfort calls, tests and repairs in person, and a deadline; closing out plays out the rest of the day.
+  - *Tune-up*: re-program a wasteful building and verify a full day against its as-found bill.
+  - Stars, money, ranks and tier unlocks persist in `user://career.json`.
+  - In a job the building is the client's: architecture is locked, HVAC is editable only while designing an install, and jobs aren't saved part-way.
+- **Simulation**:
+  - BAS programming (`set_controls`): schedule, optimal start, SAT and static resets or fixed values, economizer, DCV, VAV minimums. People now keep their own hours whatever the schedule says.
+  - Faults aimed at one piece of equipment (`set_faults`): stuck dampers and valves, broken belt, loaded filters, sensor bias.
+  - Energy and comfort meters, time-lapse to 1800×, a SAT-high alarm, and a filter alarm normalized to airflow.
+  - Classroom ventilation: DCV outdoor air up to 70 %, VAV CO₂ reset up to 80 %; "fresh air" is judged at 1,400 ppm.
+- **Sizing bug fixed**: every duct was capped at 1.2 m³/s, so each starter's AHU discharge duct starved the building (the school held setpoint ~10 % of a normal day). Ducts, fittings and diffusers are now sized for the VAVs they carry. VAVs are sized from room load (people, plug, lights, envelope, sun on glass), and seeded AHUs at 0.95 × their VAVs. All three starters now hold setpoint on a normal day.
+- **Live data**:
+  - The baskStream SDK is vendored (`vendor/baskstream-sdk`, upstream `5e11884`, API 1.7). The bridge is rewritten on it: read-only allowlist, token, origin refusal, random port, exits with the game.
+  - Game side: `LiveStation` provider, a station browser and search, `PointMatcher` auto-mapping, live readouts and room temperatures, trends backfilled from station history, and station alarms. `tools/demo_station.mjs` is a stand-in station.
+  - The hand-rolled SCRAM/MessagePack path, its fixture and the old mock are removed.
+- **UI**: title screen (Career / Creative), job board, briefings with objectives, results, the job panel, service panel, BAS programming panel, and an AHU size and price on the workbench. Stars and check marks are drawn, because the web font has no ★ ✓ ✗ glyphs. Several pre-existing → ▶ ● glyphs that rendered as boxes on the web are replaced too.
+
+Verification (2026-10-01, Godot 4.7.2, Apple M4 Max):
+
+- PASS: unit 180, build tools 32, explore 26, browser saves 36, geometry 3, simulation fidelity 291 (54 new: controls, targeted faults, meters, schedule vs people, time-lapse), career mode 295, live station 30, bridge (Node) 8. `tools/compile_check.gd` loads all scripts.
+- An independent review of the diff found 12 issues. All are fixed and have regression checks:
+  - edits from a tool or workbench left open when a job phase changes;
+  - repairs running past the deadline;
+  - float32 precision of live trend times;
+  - the bridge not starting from a path containing a space;
+  - a recursion when the bridge dies mid-login;
+  - a station session leaked by an abandoned login;
+  - a slow connect landing during a career job;
+  - importing a backup during a job;
+  - older saves inheriting the last building's BAS programming;
+  - hand-typed `station:|` ORDs never receiving values;
+  - async links landing on the wrong piece;
+  - faults testable before their onset.
+
+  The bridge token now goes by environment variable rather than on the command line.
+- Career calibration (competent play, from `tests/career_mode.gd`): service calls end with 3 stars. Tune-ups cut the office from $13.09 to $2.77 a day (79 %) and the school from $63.68 to $26.79 (58 %). Reference installs land at 86–100 % comfort and under their energy targets.
+- Web export builds. In the in-app Chromium the title screen, job board and briefing render with drawn stars, and a service job starts and time-lapses with no script errors. That pane ran at 1.3 fps (its own GL path), so the time-lapse budget now grows with frame time.
+- Not verified: frame rate in an ordinary browser, a real Niagara station (the bridge is tested against the SDK's protocol through the demo station), Safari/Firefox.
 
 ## Current: ready for the site (2026-09-26)
 

@@ -2,7 +2,7 @@
 
 ## Web distribution
 
-The browser build uses Godot 4.7.2, including its bundled fallback font. The engine is MIT licensed: [Godot license](https://godotengine.org/license/). The exported folder includes `GODOT-LICENSES.txt` with copyright notices and license texts read from the installed engine, `LDraw-AUTHORS.json` with per-part provenance, `LDraw-LICENSE.txt`, and `Audio-LICENSE.txt`. These files must travel with the web build. No CDN font or analytics service is used.
+The browser build uses Godot 4.7.2 (its bundled font is the fallback behind Geist, below). The engine is MIT licensed: [Godot license](https://godotengine.org/license/). The exported folder includes `GODOT-LICENSES.txt` with copyright notices and license texts read from the installed engine, `LDraw-AUTHORS.json` with per-part provenance, `LDraw-LICENSE.txt`, `Audio-LICENSE.txt` and `Font-LICENSE.txt`. These files must travel with the web build. No CDN font or analytics service is used.
 
 ## LDraw Official Parts Library 2026-08
 
@@ -56,6 +56,12 @@ Retained as provenance for the previous UI. The current toy UI uses a project-au
 - Concept: generated with the built-in image-generation tool on 2026-09-13 using the previous actual game screenshot as context. Saved to `docs/ui-concepts/toy-builder-concept.png`; full prompt and implementation decisions are recorded in `docs/ui-concepts/design-notes.md`. The concept is documentation, excluded from runtime import.
 - Runtime UI: project-authored native Godot Controls, StyleBoxes, vector symbols and dynamic text. No extracted generated labels, copied commercial game UI, or new external UI package.
 - Thumbnails: `assets/ui/thumbnails/`, rendered in Godot from the actual assemblies by `tools/bake_arch_thumbnails.gd` (rooms, walls, floors, doors, windows, plants) and `tools/bake_catalog_thumbnails.gd` (furniture and equipment). LDraw-derived imagery retains the CC BY 4.0 attribution above; duct geometry is project-authored.
-- Font: runtime system-font selection with Avenir Next / Nunito Sans / generic sans-serif fallbacks. No font file was downloaded or redistributed.
+- Font: Geist, bundled (see below), with Godot's own font as the fallback for glyphs it lacks.
 
 Starter cards are renders of the actual editable starters (walls down, HVAC visible), baked by `tools/bake_starter_cards.gd`; they are not concept art. LDraw attribution above applies to these renders too.
+
+## Geist (UI typeface)
+
+- Source: Geist variable font, Latin and Latin Extended subsets as packaged by Fontsource (`@fontsource-variable/geist` 5.3.0), from <https://github.com/vercel/geist-font>.
+- Files: `assets/fonts/geist/geist-latin-wght-normal.woff2`, `assets/fonts/geist/geist-latin-ext-wght-normal.woff2`. Used unmodified; weights come from the font's own `wght` axis.
+- License: SIL Open Font License 1.1, Copyright 2024 The Geist Project Authors. Full text retained at `assets/fonts/geist/OFL.txt` and shipped with the web build as `Font-LICENSE.txt`.

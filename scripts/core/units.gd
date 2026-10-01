@@ -53,6 +53,12 @@ static func length(metres: float) -> String:
 static func area(m2: float) -> String:
 	return "%s sq ft" % _grouped(roundi(sqft(m2)))
 
+# Dollars: whole dollars with grouping, or cents below $100 ("$9.64").
+static func money(usd: float) -> String:
+	if absf(usd) < 100.0:
+		return ("-" if usd < 0.0 else "") + "$%.2f" % absf(usd)
+	return ("-" if usd < 0.0 else "") + "$" + _grouped(roundi(absf(usd)))
+
 # "30 × 20 m" plan sizes as "98 × 66 ft".
 static func size(width_m: float, depth_m: float) -> String:
 	return "%.0f × %.0f ft" % [feet(width_m), feet(depth_m)]

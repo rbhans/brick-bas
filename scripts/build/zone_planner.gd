@@ -2,7 +2,7 @@ class_name ZonePlanner
 extends RefCounted
 
 # Plans the equipment that makes a room a conditioned zone: a VAV sized from
-# the room's floor area (just inside the room, inlet facing its supply), one
+# the room's cooling load (just inside the room, inlet facing its supply), one
 # or two ceiling diffusers over the room (two via a branch tee in big rooms),
 # the duct runs between them and a thermostat by the room's door. When no
 # free outlet is close, it taps the main: a trunk cross is spliced into the
@@ -16,6 +16,12 @@ const CEILING_FACE := 3.6
 const NEAR_SOCKET := 9.0     # a free outlet this close beats tapping the main
 const TAP_SEGMENT := 3.4     # straight run needed to splice in a cross (m)
 const TAP_MARGIN := 1.7      # keep the cross this far from the run's ends
+# Design airflow: sensible peak load over a 10 K supply-to-room difference.
+const DESIGN_DT_K := 10.0
+const ENVELOPE_W_M2 := 15.0   # walls, roof and leakage on a design day
+const GLASS_W_M2 := 150.0     # sun through each m² of exterior glass
+const VAV_MIN_M3_S := 0.15
+const VAV_MAX_M3_S := 1.1
 
 var objects: Array = []    # working copy: existing objects + planned ones
 var entries: Array = []
@@ -603,11 +609,22 @@ func _is_discharge(fitting_id: String) -> bool:
 	var item := _find(fitting_id)
 	return String(item.get("kind", "")) in ["tee", "cross"]
 
+# A VAV's maximum airflow for a room: its people, plug and lighting loads
+# (the simulation's own room-type table), the envelope, and sun on its glass.
+static func design_airflow(room: Dictionary) -> float:
+	var type: Array = DemoSimulation.ZONE_TYPES.get(String(room.get("type", "room")), DemoSimulation.ZONE_TYPES.room)
+	var per_m2 := float(type[0]) * float(type[1]) + float(type[2]) + float(type[3]) + ENVELOPE_W_M2
+	var glass := 0.0
+	for window in room.get("windows", []):
+		if bool(window.get("exterior", false)):
+			glass += ZoneTopology.TALL_WINDOW_AREA if String(window.get("style", "")) in ["tall_window", "storefront"] else ZoneTopology.WINDOW_AREA
+	var load_w := float(room.get("area_m2", 0.0)) * per_m2 + glass * GLASS_W_M2
+	return snappedf(clampf(load_w / (DemoSimulation.RHO_CP * DESIGN_DT_K), VAV_MIN_M3_S, VAV_MAX_M3_S), 0.01)
+
 # Zone `room` from a specific supply socket.
 func zone_from(room: Dictionary, supply: Dictionary, supply_port: String, label: String, layout: Array = ["damper", "heating_coil"], reach: float = 1.2) -> Dictionary:
 	var branch := DuctPorts.port(supply, supply_port)
-	var area := float(room.area_m2)
-	var capacity := snappedf(clampf(area * 0.0055, 0.18, 1.1), 0.01)
+	var capacity := design_airflow(room)
 	var properties := {"layout": layout.duplicate(), "sensor_enabled": true, "capacity_m3_s": capacity, "mount_level": 1}
 	var size: Vector3 = library.size("vav", properties) if library != null else Vector3(3.0, 1.6, 2.0)
 	var inlet_offset := absf(float((library.port_local("vav", properties, "inlet").get("face", Vector3(-2, 0, 0)) as Vector3).x)) if library != null else 2.0

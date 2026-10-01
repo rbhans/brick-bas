@@ -71,6 +71,7 @@ static func draw_icon(canvas: CanvasItem, name: String, rect: Rect2, color: Colo
 			for i in range(3):
 				var h: float = r * 1.7 * float(heights[i])
 				canvas.draw_rect(Rect2(c + Vector2(-r + i * r * 0.72, r * 0.85 - h), Vector2(r * 0.5, h)), color)
+			canvas.draw_line(c + Vector2(-r * 1.15, r * 0.85 + w * 1.2), c + Vector2(r * 1.15, r * 0.85 + w * 1.2), color, w, true)
 		"pause":
 			for x in [-0.4, 0.4]: canvas.draw_rect(Rect2(c + Vector2(x * r - r * 0.18, -r * 0.8), Vector2(r * 0.36, r * 1.6)), color)
 		"fast", "faster":
@@ -120,6 +121,20 @@ static func draw_icon(canvas: CanvasItem, name: String, rect: Rect2, color: Colo
 			canvas.draw_arc(c + Vector2(0, r * 0.5), r, PI * 1.15, PI * 1.85, 16, color, w, true)
 			canvas.draw_arc(c - Vector2(0, r * 0.5), r, PI * 0.15, PI * 0.85, 16, color, w, true)
 			canvas.draw_circle(c, r * 0.3, color, true, -1, true)
+		"check":
+			canvas.draw_polyline(PackedVector2Array([c + Vector2(-r * 0.7, 0.0), c + Vector2(-r * 0.2, r * 0.55), c + Vector2(r * 0.75, -r * 0.55)]), color, w * 1.2, true)
+		"bell":
+			canvas.draw_arc(c + Vector2(0, -r * 0.1), r * 0.6, PI, TAU, 16, color, w, true)
+			canvas.draw_line(c + Vector2(-r * 0.6, -r * 0.1), c + Vector2(-r * 0.75, r * 0.55), color, w, true)
+			canvas.draw_line(c + Vector2(r * 0.6, -r * 0.1), c + Vector2(r * 0.75, r * 0.55), color, w, true)
+			canvas.draw_line(c + Vector2(-r * 0.9, r * 0.55), c + Vector2(r * 0.9, r * 0.55), color, w, true)
+			canvas.draw_circle(c + Vector2(0, r * 0.82), r * 0.16, color, true, -1, true)
+		"warning":
+			canvas.draw_polyline(PackedVector2Array([c + Vector2(0, -r), c + Vector2(r, r * 0.8), c + Vector2(-r, r * 0.8), c + Vector2(0, -r)]), color, w, true)
+			canvas.draw_line(c + Vector2(0, -r * 0.3), c + Vector2(0, r * 0.25), color, w, true)
+			canvas.draw_circle(c + Vector2(0, r * 0.52), r * 0.1, color, true, -1, true)
+		"dot":
+			canvas.draw_circle(c, r * 0.45, color, true, -1, true)
 		"airflow":
 			for y in [-0.5, 0.1, 0.7]:
 				canvas.draw_arc(c + Vector2(-r * 0.2, y * r - r * 0.25), r * 0.28, PI * 0.5, PI * 1.9, 10, color, w, true)

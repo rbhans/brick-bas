@@ -16,6 +16,8 @@ extends RefCounted
 
 const STEP_SECONDS := 1.0
 const MAX_STEPS_PER_ADVANCE := 3600
+const MAX_SPEED := 1800.0 # time-lapse: a whole occupied day in about 25 s
+const SAVED_SPEED_MAX := 60.0 # checkpoints keep the normal speeds only
 const DAY_S := 86400.0
 const START_SECONDS := 23400.0 # 06:30: players see the morning start-up.
 const SCENARIOS := ["Normal weekday", "Hot afternoon", "Fan failure", "Damper stuck at 25%", "Dirty filter", "Sensor bias", "Data interruption", "Cold morning", "Unoccupied", "Economizer day", "Heat wave"]
@@ -44,6 +46,50 @@ const DEFAULT_HEAT_C := 21.0
 const UNOCC_COOL_C := 29.0
 const UNOCC_HEAT_C := 16.0
 const NIGHT_RECOVERY_K := 2.0 # night cycle heats to 18 / cools to 27, stops at 17 / 28
+
+# BAS programming the player can change (Menu → BAS programming, and the
+# tune-up jobs). The defaults are the sequences described above; people keep
+# their own hours (OCCUPIED_START_S..OCCUPIED_END_S) whatever the schedule says.
+const DEFAULT_CONTROLS := {
+	"occupied_start_h": 7.0, "occupied_end_h": 18.0, # HVAC occupied schedule
+	"optimal_start": true,       # early warm-up / cool-down before the schedule
+	"sat_reset": true,           # SAT trim & respond; off holds sat_fixed_c
+	"sat_fixed_c": 12.8,
+	"static_reset": true,        # duct static trim & respond; off holds static_fixed_pa
+	"static_fixed_pa": 250.0,
+	"economizer": true,          # free cooling with outdoor air
+	"dcv": true,                 # CO2 demand-controlled ventilation; off holds DCV_OFF_POSITION
+	"vav_min_fraction": 0.3,     # occupied VAV minimum, fraction of maximum
+}
+const CONTROL_LIMITS := {"occupied_start_h": [0.0, 23.5], "occupied_end_h": [0.5, 24.0], "sat_fixed_c": [10.0, 18.0], "static_fixed_pa": [100.0, 500.0], "vav_min_fraction": [0.1, 0.8]}
+const DCV_OFF_POSITION := 0.35 # design outdoor-air minimum without CO2 reset
+
+# Faults aimed at one piece of equipment (service jobs, the debug menu). Each
+# is {kind, target, value}; scenario faults still apply on top of these.
+#   fan_failure      AHU   supply fan stops (belt / VFD) while commanded on
+#   dirty_filter     AHU   filter loaded to FILTER_DIRTY_PA
+#   chw_valve_stuck  AHU   cooling valve frozen at `value` (0..1)
+#   oa_damper_stuck  AHU   outdoor-air damper frozen at `value` (0..1)
+#   stuck_damper     VAV   damper frozen at `value` (0..1)
+#   reheat_stuck     VAV   reheat valve frozen at `value` (0..1)
+#   sensor_bias      zone  space sensor reads `value` K off
+const FAULT_KINDS := {"fan_failure": "unit", "dirty_filter": "unit", "chw_valve_stuck": "unit", "oa_damper_stuck": "unit",
+	"stuck_damper": "terminal", "reheat_stuck": "terminal", "sensor_bias": "zone"}
+const MAX_FAULTS := 32
+
+# Meters. Electricity: fans plus chilled water at a plant COP; gas: hot water
+# (AHU heating coils and VAV reheat) at a boiler efficiency. Comfort is judged
+# on the true room temperature while people are in: within COMFORT_BAND_K of
+# the room's occupied setpoints, and separately within a fixed comfort range.
+const CHILLER_COP := 3.2
+const BOILER_EFFICIENCY := 0.85
+const KWH_PER_THERM := 29.3071
+const ELECTRIC_USD_PER_KWH := 0.14
+const GAS_USD_PER_THERM := 1.15
+const COMFORT_BAND_K := 1.1 # ±2 °F
+const COMFORT_MIN_C := 20.0 # 68 °F
+const COMFORT_MAX_C := 24.7 # 76.5 °F
+const FRESH_AIR_CO2_PPM := 1400.0 # "fresh air" while CO2 stays under this (a common classroom limit)
 
 # Zone envelope and air.
 const RHO_CP := 1206.0 # J/(m³·K), air volumetric heat capacity
@@ -148,7 +194,7 @@ const TR_INTERVAL_S := 120.0
 const ECON_HIGH_LIMIT_C := 21.0
 const ECON_DEADBAND_K := 0.5
 const OA_MIN_POSITION := 0.2
-const DCV_MAX_POSITION := 0.5 # OA minimum rises as worst zone CO2 goes 700 -> 1000 ppm
+const DCV_MAX_POSITION := 0.7 # OA minimum rises as worst zone CO2 goes 700 -> 1000 ppm
 const DCV_LOW_PPM := 700.0
 const DCV_HIGH_PPM := 1000.0
 const CHW_C := 6.7 # chilled water supply
@@ -168,7 +214,7 @@ const SAT_OFF_TAU_S := 300.0
 # VAV terminal (pressure independent, ASHRAE Guideline 36 style dual maximum).
 const VAV_MIN_FRACTION := 0.3
 const VAV_HEAT_MAX_FRACTION := 0.45
-const VAV_CO2_MAX_FRACTION := 0.6 # zone minimum raised as zone CO2 goes 1000 -> 1400 ppm
+const VAV_CO2_MAX_FRACTION := 0.8 # zone minimum raised as zone CO2 goes 1000 -> 1400 ppm
 const VAV_CO2_LOW_PPM := 1000.0
 const VAV_CO2_HIGH_PPM := 1400.0
 const VAV_OVERSIZE := 1.25 # box flow fully open at design static, relative to max
@@ -201,7 +247,7 @@ const TERMINAL_STATE := {"cool_i": [0.0, 1.0], "heat_i": [0.0, 1.0], "cooling_lo
 	"cooling_output": [0.0, 1.0], "discharge_temp_c": [-40.0, 90.0], "heating_w": [0.0, 1.0e7], "cooling_w": [0.0, 1.0e7],
 	"active_cool_c": [16.0, 32.0], "active_heat_c": [14.0, 30.0]}
 const UNIT_STATE := {"fan_command": [0.0, 1.0], "fan_feedback": [0.0, 1.0], "run_timer_s": [0.0, 3600.0], "static_i": [0.0, 1.0],
-	"static_sp_pa": [150.0, 300.0], "duct_pressure_pa": [0.0, 3000.0], "fan_total_pa": [0.0, 3000.0], "sat_sp_c": [5.0, 45.0],
+	"static_sp_pa": [100.0, 500.0], "duct_pressure_pa": [0.0, 3000.0], "fan_total_pa": [0.0, 3000.0], "sat_sp_c": [5.0, 45.0],
 	"sat_tr_c": [12.8, 18.0], "sat_i": [-100.0, 100.0], "sat_u": [-100.0, 100.0], "mode_timer_s": [0.0, 1.0e9], "tr_timer_s": [0.0, 1.0e4],
 	"oa_min": [0.0, 1.0], "damper_command": [0.0, 1.0], "damper_feedback": [0.0, 1.0], "cooling_command": [0.0, 1.0],
 	"cooling_output": [0.0, 1.0], "heating_command": [0.0, 1.0], "heating_output": [0.0, 1.0], "return_temp_c": [-40.0, 90.0],
@@ -215,6 +261,8 @@ var speed := 1.0
 var sim_seconds := START_SECONDS
 var scenario := "Normal weekday"
 var accumulator := 0.0
+var controls: Dictionary = DEFAULT_CONTROLS.duplicate() # read with controls_state(), change with set_controls()
+var people_present := false # building hours (people), independent of the HVAC schedule
 # Public state for tests and debugging; UI should use the *_state() accessors.
 var zones: Dictionary = {}
 var units: Dictionary = {}
@@ -266,6 +314,10 @@ var _fault_fan := ""
 var _fault_filter := ""
 var _fault_damper := ""
 var _fault_bias := ""
+var _faults: Array = [] # validated set_faults() input
+var _meters: Dictionary = {} # site energy since reset_meters()
+var _zone_meters: Dictionary = {} # zone id -> comfort meter
+var _power_w := PackedFloat64Array([0.0, 0.0, 0.0]) # this step: electric, chilled-water (thermal), hot-water (thermal)
 var _points_cache: Array[Dictionary] = []
 var _quality: Array[String] = []
 var _points_revision := -1
@@ -277,7 +329,8 @@ func _init() -> void:
 # ---------------------------------------------------------------- lifecycle
 
 # Back to 06:30 on a Normal weekday. Keeps the configured building (topology
-# and open doors) but returns every zone, AHU and VAV to its start state.
+# and open doors), its BAS programming and any targeted faults, but returns
+# every zone, AHU and VAV to its start state and zeroes the meters.
 func reset() -> void:
 	sim_seconds = START_SECONDS
 	accumulator = 0.0
@@ -290,13 +343,23 @@ func reset() -> void:
 	for z in _zone_list: _init_zone_state(z, start_c)
 	for u in _unit_list: _init_unit_state(u, start_c)
 	for t in _term_list: _init_terminal_state(t, start_c)
+	reset_meters()
+	_after_state_change()
+
+# Jump the clock to a time of day (seconds since midnight) on the current day
+# without simulating the gap: an initial condition, used to start a job at a
+# given hour (callers usually pre-roll with step_for_test instead).
+func set_time_of_day(seconds: float) -> void:
+	if not is_finite(seconds): return
+	sim_seconds = floor(sim_seconds / DAY_S) * DAY_S + clampf(seconds, 0.0, DAY_S - 1.0)
+	_update_environment(false)
 	_after_state_change()
 
 # Fixed 1 s steps: identical results at any speed. A backlog beyond the cap is
 # dropped rather than replayed (a long hitch must not freeze the game).
 func advance(real_delta: float) -> int:
 	if not running or not is_finite(real_delta) or real_delta <= 0.0: return 0
-	var rate := clampf(speed, 0.0, 60.0) if is_finite(speed) else 0.0
+	var rate := clampf(speed, 0.0, MAX_SPEED) if is_finite(speed) else 0.0
 	accumulator += real_delta * rate
 	var count := 0
 	while accumulator >= STEP_SECONDS and count < MAX_STEPS_PER_ADVANCE:
@@ -309,6 +372,10 @@ func advance(real_delta: float) -> int:
 func step_for_test(seconds: float) -> void:
 	if not is_finite(seconds): return
 	for _i in range(int(floor(seconds / STEP_SECONDS + 1.0e-6))): _step()
+
+# Steps regardless of pause and speed (the game's time-lapse and job runs).
+func run_steps(count: int) -> void:
+	for _i in range(clampi(count, 0, MAX_STEPS_PER_ADVANCE)): _step()
 
 # Weather and faults switch immediately. Picking a scenario right after
 # reset() also applies its start temperatures; entering Cold morning always
@@ -424,6 +491,97 @@ func set_lights(zone_id: String, on: bool) -> void:
 	z.lights_on = on
 	_revision += 1
 
+# BAS programming. Unknown keys are ignored, numbers clamped to CONTROL_LIMITS
+# and the schedule kept at least 30 min long. Takes effect on the next step.
+func set_controls(values: Dictionary) -> void:
+	for key in values:
+		if not DEFAULT_CONTROLS.has(key): continue
+		var value: Variant = values[key]
+		if DEFAULT_CONTROLS[key] is bool:
+			if value is bool: controls[key] = value
+		elif (value is float or value is int) and is_finite(float(value)):
+			var bounds: Array = CONTROL_LIMITS.get(key, [-INF, INF])
+			controls[key] = clampf(float(value), float(bounds[0]), float(bounds[1]))
+	if float(controls.occupied_end_h) < float(controls.occupied_start_h) + 0.5:
+		controls.occupied_end_h = minf(24.0, float(controls.occupied_start_h) + 0.5)
+		controls.occupied_start_h = minf(float(controls.occupied_start_h), float(controls.occupied_end_h) - 0.5)
+	_update_environment(false)
+	_revision += 1
+
+func controls_state() -> Dictionary:
+	return controls.duplicate()
+
+# Replaces the targeted faults: [{"kind", "target", "value"}]. Unknown kinds,
+# empty targets and duplicates (same kind and target) are dropped; values are
+# clamped (sensor bias ±6 K, positions 0..1). Targets that do not exist yet
+# are kept and apply once that equipment is configured.
+func set_faults(list: Array) -> void:
+	_faults.clear()
+	var seen: Dictionary = {}
+	for entry in list:
+		if not entry is Dictionary or _faults.size() >= MAX_FAULTS: continue
+		var kind := String(entry.get("kind", "")) if entry.get("kind", "") is String else ""
+		var target := String(entry.get("target", "")) if (entry.get("target", "") is String or entry.get("target", "") is StringName) else ""
+		if not FAULT_KINDS.has(kind) or target.is_empty() or target.length() > 256 or seen.has(kind + "\n" + target): continue
+		seen[kind + "\n" + target] = true
+		var fallback := SENSOR_BIAS_K if kind == "sensor_bias" else (STUCK_DAMPER if kind == "stuck_damper" else 0.0)
+		var value := _num(entry.get("value"), fallback, -6.0, 6.0) if kind == "sensor_bias" else _num(entry.get("value"), fallback, 0.0, 1.0)
+		_faults.append({"kind": kind, "target": target, "value": value})
+	_after_state_change()
+
+# Removes the targeted faults on one piece of equipment (all kinds, or one).
+func clear_fault(target: String, kind: String = "") -> bool:
+	var before := _faults.size()
+	_faults = _faults.filter(func(f: Dictionary) -> bool: return not (String(f.target) == target and (kind.is_empty() or String(f.kind) == kind)))
+	if _faults.size() == before: return false
+	_after_state_change()
+	return true
+
+func faults() -> Array:
+	return _faults.duplicate(true)
+
+# Zeroes the energy and comfort meters (a job's measuring period starts here).
+func reset_meters() -> void:
+	_meters = {"seconds": 0.0, "fan_wh": 0.0, "chw_wh": 0.0, "hw_wh": 0.0, "electric_wh": 0.0, "gas_wh": 0.0, "peak_kw": 0.0}
+	_zone_meters.clear()
+	_power_w.fill(0.0)
+	_revision += 1
+
+# Energy since reset_meters(): kWh, therms, dollars, and this step's power.
+func energy() -> Dictionary:
+	var kwh := float(_meters.get("electric_wh", 0.0)) / 1000.0
+	var therms := float(_meters.get("gas_wh", 0.0)) / 1000.0 / KWH_PER_THERM
+	return {"hours": float(_meters.get("seconds", 0.0)) / 3600.0, "electric_kwh": kwh, "fan_kwh": float(_meters.get("fan_wh", 0.0)) / 1000.0,
+		"cooling_kwh": float(_meters.get("chw_wh", 0.0)) / 1000.0 / CHILLER_COP, "cooling_ton_h": float(_meters.get("chw_wh", 0.0)) / 3516.85,
+		"heating_therms": therms, "cost_usd": kwh * ELECTRIC_USD_PER_KWH + therms * GAS_USD_PER_THERM,
+		"electric_kw": _power_w[0] / 1000.0, "gas_kw": _power_w[2] / BOILER_EFFICIENCY / 1000.0, "peak_kw": float(_meters.get("peak_kw", 0.0))}
+
+# Comfort since reset_meters(), per real zone: hours with people in, the share
+# of them within COMFORT_BAND_K of the occupied setpoints ("setpoint"), within
+# COMFORT_MIN_C..COMFORT_MAX_C ("range") and with CO2 under FRESH_AIR_CO2_PPM
+# ("air"), and kelvin-hours too warm or too cold. `zone_filter` limits the
+# summary to those ids (empty = every zone).
+func comfort(zone_filter: Array = []) -> Dictionary:
+	var per: Dictionary = {}
+	var occ := 0.0
+	var ok := 0.0
+	var band := 0.0
+	var air := 0.0
+	for id in _zone_meters:
+		if not zone_filter.is_empty() and not zone_filter.has(id): continue
+		var m: Dictionary = _zone_meters[id]
+		var hours := float(m.occ_s) / 3600.0
+		per[id] = {"occupied_h": hours, "setpoint_pct": float(m.ok_s) / float(m.occ_s) * 100.0 if float(m.occ_s) > 0.0 else 100.0,
+			"range_pct": float(m.band_s) / float(m.occ_s) * 100.0 if float(m.occ_s) > 0.0 else 100.0,
+			"air_pct": float(m.air_s) / float(m.occ_s) * 100.0 if float(m.occ_s) > 0.0 else 100.0,
+			"warm_kh": float(m.warm_ks) / 3600.0, "cold_kh": float(m.cold_ks) / 3600.0}
+		occ += float(m.occ_s)
+		ok += float(m.ok_s)
+		band += float(m.band_s)
+		air += float(m.air_s)
+	return {"zones": per, "occupied_h": occ / 3600.0, "setpoint_pct": ok / occ * 100.0 if occ > 0.0 else 100.0, "range_pct": band / occ * 100.0 if occ > 0.0 else 100.0,
+		"air_pct": air / occ * 100.0 if occ > 0.0 else 100.0}
+
 # ---------------------------------------------------------------- read accessors (copies)
 
 func zone_ids() -> Array:
@@ -438,8 +596,9 @@ func terminal_ids() -> Array:
 func weather() -> Dictionary:
 	var minutes := int(floor(_tod / 60.0))
 	return {"outdoor_temp_c": _oat, "solar_w_m2": _sol[4], "occupied": occupied, "time_of_day_s": _tod,
-		"clock": "%02d:%02d" % [floori(minutes / 60.0), minutes % 60], "scenario": scenario,
-		"occupied_elapsed_s": _tod - OCCUPIED_START_S if occupied else 0.0,
+		"clock": "%02d:%02d" % [floori(minutes / 60.0), minutes % 60], "scenario": scenario, "people_present": people_present,
+		"day": int(floor(sim_seconds / DAY_S)) + 1,
+		"occupied_elapsed_s": _tod - _schedule_start() if occupied else 0.0,
 		"irradiance_w_m2": {"N": _sol[0], "E": _sol[1], "S": _sol[2], "W": _sol[3], "horizontal": _sol[4]}}
 
 func zone_state(zone_id: String) -> Dictionary:
@@ -481,6 +640,8 @@ func unit_state(ahu_id: String) -> Dictionary:
 		"layout": (u.layout as Array).duplicate(), "has_fan": bool(u.has_fan), "fan_running": float(u.fan_feedback) > FAN_PROOF_SPEED,
 		"terminals": term_ids, "zones": zone_ids_served,
 		"fault": "fan_failure" if bool(u.fan_fault) else ("dirty_filter" if bool(u.filter_fault) else ""),
+		"filter_design_dp_pa": (FILTER_DIRTY_PA if bool(u.filter_fault) else float(u.filter_loading_pa)) if bool(u.has_filter) else 0.0,
+		"flow_fraction": float(u.flow_actual_m3_s) / maxf(float(u.capacity_m3_s), 0.001),
 		"supply_airflow_m3_s": float(u.flow_actual_m3_s), "available_airflow_m3_s": float(u.available_flow_m3_s),
 		"duct_pressure_setpoint_pa": float(u.static_sp_pa), "supply_setpoint_c": float(u.sat_sp_c)}
 	for key in UNIT_STATE:
@@ -499,7 +660,7 @@ func terminal_state(vav_id: String) -> Dictionary:
 		"cool_setpoint_c": float(t.active_cool_c), "heat_setpoint_c": float(t.active_heat_c),
 		"occ_cool_setpoint_c": float(z.cool_setpoint_c), "occ_heat_setpoint_c": float(z.heat_setpoint_c),
 		"airflow_target_m3_s": float(t.flow_sp_m3_s), "airflow_m3_s": float(t.flow_actual_m3_s), "min_airflow_m3_s": float(t.vmin_m3_s),
-		"stuck": bool(t.stuck), "co2_ppm": float(z.co2_ppm)}
+		"stuck": bool(t.stuck), "reheat_stuck": float(t.reheat_stuck) >= 0.0, "co2_ppm": float(z.co2_ppm)}
 	for key in TERMINAL_STATE:
 		if not state.has(key): state[key] = float(t[key])
 	return state
@@ -529,6 +690,8 @@ func _build_points() -> Array[Dictionary]:
 	_pt(out, "site.occupied", occupied, "bool", "", stale, now)
 	_pt(out, "site.solar", _sol[4], "number", "W/m2", stale, now)
 	_pt(out, "site.time_of_day", _tod / 3600.0, "number", "h", stale, now)
+	_pt(out, "site.electric_power", _power_w[0] / 1000.0, "number", "kW", stale, now)
+	_pt(out, "site.energy_cost", float(energy().cost_usd), "number", "USD", stale, now)
 	for id in zones:
 		var z: Dictionary = zones[id]
 		_pt(out, id + ".space_temp", float(z.measured_temp_c), "number", "degC", stale, now)
@@ -607,9 +770,10 @@ func checkpoint() -> Dictionary:
 	for id in units: ahus[id] = _save_record(units[id], UNIT_STATE, true)
 	var vavs: Dictionary = {}
 	for id in terminals: vavs[id] = _save_record(terminals[id], TERMINAL_STATE, false)
-	return {"version": 3, "sim_seconds": sim_seconds, "scenario": scenario, "accumulator": accumulator, "running": running, "speed": speed,
+	return {"version": 4, "sim_seconds": sim_seconds, "scenario": scenario, "accumulator": accumulator, "running": running, "speed": minf(speed, SAVED_SPEED_MAX),
 		"step_index": float(_step_index), "steps_since_reset": float(_steps_since_reset),
-		"zones": real, "dummy_zones": dummy, "units": ahus, "terminals": vavs, "openings": _openings.duplicate(true)}
+		"zones": real, "dummy_zones": dummy, "units": ahus, "terminals": vavs, "openings": _openings.duplicate(true),
+		"controls": controls.duplicate(), "faults": _faults.duplicate(true), "meters": _meters.duplicate(), "zone_meters": _zone_meters.duplicate(true)}
 
 # Defensive: unknown ids/fields and invalid values are ignored, numbers are
 # clamped. State for ids not configured yet is kept and applied when they
@@ -631,8 +795,28 @@ func restore_checkpoint(state: Dictionary) -> void:
 	_restore_group(state.get("units"), units, UNIT_STATE, true, "units")
 	_restore_group(state.get("terminals"), terminals, TERMINAL_STATE, false, "terminals")
 	if state.get("openings") is Array: set_open_connections(state.openings)
+	if state.get("controls") is Dictionary: set_controls(state.controls)
+	if state.get("faults") is Array: set_faults(state.faults)
+	_restore_meters(state.get("meters"), state.get("zone_meters"))
 	_update_environment(false)
 	_after_state_change()
+
+func _restore_meters(site: Variant, per_zone: Variant) -> void:
+	if site is Dictionary:
+		for key in _meters:
+			_meters[key] = _num(site.get(key), float(_meters[key]), 0.0, 1.0e12)
+	if per_zone is Dictionary:
+		for id in per_zone:
+			if not (id is String or id is StringName) or not per_zone[id] is Dictionary or _zone_meters.size() >= 5000: continue
+			var m: Dictionary = _new_zone_meter()
+			for key in m: m[key] = _num(per_zone[id].get(key), 0.0, 0.0, 1.0e12)
+			m.ok_s = minf(float(m.ok_s), float(m.occ_s))
+			m.band_s = minf(float(m.band_s), float(m.occ_s))
+			m.air_s = minf(float(m.air_s), float(m.occ_s))
+			_zone_meters[String(id)] = m
+
+static func _new_zone_meter() -> Dictionary:
+	return {"occ_s": 0.0, "ok_s": 0.0, "band_s": 0.0, "air_s": 0.0, "warm_ks": 0.0, "cold_ks": 0.0}
 
 func _save_record(record: Dictionary, keys: Dictionary, unit: bool) -> Dictionary:
 	var out: Dictionary = {}
@@ -688,6 +872,7 @@ func _step() -> void:
 	_unit_air(dt)
 	_terminal_air(dt)
 	_zone_heat(dt)
+	_meter(dt)
 	_refresh_routes()
 	_publish_aliases()
 	_revision += 1
@@ -719,11 +904,13 @@ func _update_environment(sweep: bool) -> void:
 		_sol[2] = diffuse + vertical_beam * maxf(0.0, sin(azimuth))
 		_sol[3] = diffuse + vertical_beam * maxf(0.0, -cos(azimuth))
 		_sol[4] = horizontal
-	var occ := scenario != "Unoccupied" and _tod >= OCCUPIED_START_S and _tod < OCCUPIED_END_S
+	# People keep the building's hours; the HVAC follows its own schedule.
+	people_present = scenario != "Unoccupied" and _tod >= OCCUPIED_START_S and _tod < OCCUPIED_END_S
+	var occ := scenario != "Unoccupied" and _tod >= _schedule_start() and _tod < _schedule_end()
 	if sweep and occ != occupied:
 		for z in _zone_list: z.lights_override = -1.0
 	occupied = occ
-	for key in PROFILES: _profile_now[key] = _profile(PROFILES[key], hour) if occ else 0.0
+	for key in PROFILES: _profile_now[key] = _profile(PROFILES[key], hour) if people_present else 0.0
 	outdoor_temp_c = _oat
 	solar_w_m2 = _sol[4]
 
@@ -744,7 +931,8 @@ func _unit_mode(u: Dictionary, ui: int, old: String) -> String:
 	var can_heat := bool(u.can_heat)
 	var can_cool := bool(u.can_cool) or (bool(u.has_damper) and _oat < float(u.return_temp_c) - 2.0)
 	# Optimal start: begin early enough to reach occupied setpoints by 07:00.
-	if scenario != "Unoccupied" and _tod >= OPTIMAL_START_EARLIEST_S and _tod < OCCUPIED_START_S:
+	var start := _schedule_start()
+	if bool(controls.optimal_start) and scenario != "Unoccupied" and _tod >= start - OPTIMAL_START_MAX_S and _tod < start:
 		if old == "Warm-up" or old == "Cool-down": return old
 		var need_heat := 0.0
 		var need_cool := 0.0
@@ -752,7 +940,7 @@ func _unit_mode(u: Dictionary, ui: int, old: String) -> String:
 			var z: Dictionary = _zone_list[zi]
 			need_heat = maxf(need_heat, float(z.heat_setpoint_c) - float(z.measured_temp_c))
 			need_cool = maxf(need_cool, float(z.measured_temp_c) - float(z.cool_setpoint_c))
-		var to_go := OCCUPIED_START_S - _tod
+		var to_go := start - _tod
 		if can_heat and need_heat > 0.2 and need_heat >= need_cool and to_go <= _lead(need_heat): return "Warm-up"
 		if can_cool and need_cool > 0.2 and to_go <= _lead(need_cool): return "Cool-down"
 	# Night cycle against the unoccupied setbacks, with recovery hysteresis.
@@ -767,6 +955,12 @@ func _unit_mode(u: Dictionary, ui: int, old: String) -> String:
 		if can_heat and temp < UNOCC_HEAT_C: return "Setback"
 		if can_cool and temp > UNOCC_COOL_C: return "Setup"
 	return "Off"
+
+func _schedule_start() -> float:
+	return float(controls.occupied_start_h) * 3600.0
+
+func _schedule_end() -> float:
+	return float(controls.occupied_end_h) * 3600.0
 
 func _lead(error_k: float) -> float:
 	return clampf(OPTIMAL_START_BASE_S + OPTIMAL_START_PER_K_S * error_k, 0.0, OPTIMAL_START_MAX_S)
@@ -800,7 +994,7 @@ func _control_terminals(dt: float) -> void:
 		var inlet := float(u.supply_temp_c) + DUCT_GAIN_K if unit_running else meas
 		var vmin := 0.0
 		if mode == "Occupied":
-			vmin = VAV_MIN_FRACTION * vmax
+			vmin = float(controls.vav_min_fraction) * vmax
 			vmin = lerpf(vmin, maxf(vmin, VAV_CO2_MAX_FRACTION * vmax), clampf((float(z.co2_ppm) - VAV_CO2_LOW_PPM) / (VAV_CO2_HIGH_PPM - VAV_CO2_LOW_PPM), 0.0, 1.0))
 		var sp := 0.0
 		if mode != "Off":
@@ -833,7 +1027,7 @@ func _control_terminals(dt: float) -> void:
 				cmd = clampf(ff + trim, 0.0, 1.0)
 			t.flow_trim = trim
 		t.damper_command = cmd
-		t.damper_feedback = STUCK_DAMPER if bool(t.stuck) else _actuate(float(t.damper_feedback), cmd, dt / VAV_DAMPER_STROKE_S)
+		t.damper_feedback = float(t.stuck_at) if bool(t.stuck) else _actuate(float(t.damper_feedback), cmd, dt / VAV_DAMPER_STROKE_S)
 		# Reheat valve positioned for the discharge-air setpoint; needs airflow.
 		var flow := float(t.flow_actual_m3_s)
 		var proven := unit_running and flow > maxf(0.003, 0.05 * vmax)
@@ -844,7 +1038,7 @@ func _control_terminals(dt: float) -> void:
 			var capacity := _reheat_capacity(t, flow, inlet)
 			rh = clampf((dat_sp - inlet) / capacity, 0.0, 1.0) if capacity > 0.01 else 0.0
 		t.reheat_command = rh
-		t.reheat_output = _actuate(float(t.reheat_output), rh, dt / VALVE_STROKE_S)
+		t.reheat_output = float(t.reheat_stuck) if float(t.reheat_stuck) >= 0.0 and bool(t.has_reheat) else _actuate(float(t.reheat_output), rh, dt / VALVE_STROKE_S)
 		var cc := 0.0
 		if bool(t.has_cooling) and proven and cool > 0.0:
 			cc = cool if inlet > meas - 0.5 else clampf((cool - 0.5) * 2.0, 0.0, 1.0)
@@ -864,9 +1058,10 @@ func _control_units(dt: float) -> void:
 		var u: Dictionary = _unit_list[ui]
 		var mode := String(u.mode)
 		var enable := mode != "Off" and bool(u.has_fan)
+		if not bool(controls.static_reset): u.static_sp_pa = float(controls.static_fixed_pa)
 		if enable and not bool(u.enabled):
 			u.static_i = 0.0
-			u.static_sp_pa = STATIC_SP_INIT_PA
+			u.static_sp_pa = STATIC_SP_INIT_PA if bool(controls.static_reset) else float(controls.static_fixed_pa)
 			u.sat_tr_c = SAT_MAX_C
 			u.tr_timer_s = 0.0
 			u.sat_i = 0.0
@@ -903,8 +1098,9 @@ func _control_air_side(u: Dictionary, ui: int, mode: String, proven: bool, dt: f
 	var sat_sp := float(u.sat_sp_c)
 	if proven:
 		if mode == "Occupied" and bool(u.has_damper):
-			oa_min = OA_MIN_POSITION + (DCV_MAX_POSITION - OA_MIN_POSITION) * clampf((_max_co2(ui) - DCV_LOW_PPM) / (DCV_HIGH_PPM - DCV_LOW_PPM), 0.0, 1.0)
-		if bool(u.has_damper) and (mode == "Occupied" or mode == "Cool-down" or mode == "Setup"):
+			if bool(controls.dcv): oa_min = OA_MIN_POSITION + (DCV_MAX_POSITION - OA_MIN_POSITION) * clampf((_max_co2(ui) - DCV_LOW_PPM) / (DCV_HIGH_PPM - DCV_LOW_PPM), 0.0, 1.0)
+			else: oa_min = DCV_OFF_POSITION
+		if bool(controls.economizer) and bool(u.has_damper) and (mode == "Occupied" or mode == "Cool-down" or mode == "Setup"):
 			var limit := minf(ECON_HIGH_LIMIT_C, float(u.return_temp_c))
 			econ = _oat < limit if bool(u.economizer) else _oat < limit - ECON_DEADBAND_K
 		if float(u.mode_timer_s) >= TR_DELAY_S:
@@ -913,7 +1109,9 @@ func _control_air_side(u: Dictionary, ui: int, mode: String, proven: bool, dt: f
 				u.tr_timer_s = 0.0
 				_trim_respond(u, ui, mode)
 		match mode:
-			"Occupied": sat_sp = lerpf(float(u.sat_tr_c), SAT_MIN_C, clampf((_oat - SAT_RESET_OAT_LOW_C) / (SAT_RESET_OAT_HIGH_C - SAT_RESET_OAT_LOW_C), 0.0, 1.0))
+			"Occupied":
+				if bool(controls.sat_reset): sat_sp = lerpf(float(u.sat_tr_c), SAT_MIN_C, clampf((_oat - SAT_RESET_OAT_LOW_C) / (SAT_RESET_OAT_HIGH_C - SAT_RESET_OAT_LOW_C), 0.0, 1.0))
+				else: sat_sp = float(controls.sat_fixed_c)
 			"Cool-down", "Setup": sat_sp = SAT_MIN_C
 			"Warm-up", "Setback": sat_sp = SAT_WARMUP_C
 	u.sat_sp_c = sat_sp
@@ -959,8 +1157,8 @@ func _control_air_side(u: Dictionary, ui: int, mode: String, proven: bool, dt: f
 	u.damper_command = damper
 	u.cooling_command = cool
 	u.heating_command = heat
-	u.damper_feedback = _actuate(float(u.damper_feedback), damper, dt / OA_DAMPER_STROKE_S)
-	u.cooling_output = _actuate(float(u.cooling_output), cool, dt / VALVE_STROKE_S)
+	u.damper_feedback = float(u.oa_stuck) if float(u.oa_stuck) >= 0.0 and bool(u.has_damper) else _actuate(float(u.damper_feedback), damper, dt / OA_DAMPER_STROKE_S)
+	u.cooling_output = float(u.chw_stuck) if float(u.chw_stuck) >= 0.0 and bool(u.has_cooling) else _actuate(float(u.cooling_output), cool, dt / VALVE_STROKE_S)
 	u.heating_output = _actuate(float(u.heating_output), heat, dt / VALVE_STROKE_S)
 
 # GL36-style trim & respond for SAT (cooling requests) and duct static
@@ -983,6 +1181,7 @@ func _trim_respond(u: Dictionary, ui: int, mode: String) -> void:
 	if mode == "Occupied":
 		if sat_requests > ignores: u.sat_tr_c = maxf(SAT_MIN_C, float(u.sat_tr_c) - minf(SAT_TR_RESPOND_K * (sat_requests - ignores), SAT_TR_RESPOND_MAX_K))
 		else: u.sat_tr_c = minf(SAT_MAX_C, float(u.sat_tr_c) + SAT_TR_TRIM_K)
+	if not bool(controls.static_reset): return
 	if sp_requests > ignores: u.static_sp_pa = minf(STATIC_SP_MAX_PA, float(u.static_sp_pa) + minf(STATIC_RESPOND_PA * (sp_requests - ignores), STATIC_RESPOND_MAX_PA))
 	else: u.static_sp_pa = maxf(STATIC_SP_MIN_PA, float(u.static_sp_pa) - STATIC_TRIM_PA)
 
@@ -1203,7 +1402,7 @@ func _zone_heat(dt: float) -> void:
 		var lights_on := override > 0.5 or (override < -0.5 and occupied and bool(z.lights_default))
 		var people_w := people * float(z.person_w)
 		var lights_w := float(z.lights_w) if lights_on else 0.0
-		var plug_w := float(z.plug_w) * (1.0 if occupied else float(z.plug_night))
+		var plug_w := float(z.plug_w) * (1.0 if people_present else float(z.plug_night))
 		var solar := float(z.aperture_n) * _sol[0] + float(z.aperture_e) * _sol[1] + float(z.aperture_s) * _sol[2] + float(z.aperture_w) * _sol[3]
 		var radiant := SOLAR_RADIANT * solar + PEOPLE_RADIANT * people_w + LIGHTS_RADIANT * lights_w + PLUG_RADIANT * plug_w
 		var internal := people_w + lights_w + plug_w
@@ -1226,6 +1425,48 @@ func _zone_heat(dt: float) -> void:
 		z.supply_airflow_m3_s = q_sup
 		z.supply_temp_c = qt_sup / q_sup if q_sup > 1.0e-6 else tn
 		z.outdoor_exchange_m3_s = q_out
+
+# Energy and comfort meters, once per step (see energy() and comfort()).
+func _meter(dt: float) -> void:
+	var fan := 0.0
+	var chw := 0.0
+	var hw := 0.0
+	for u in _unit_list:
+		fan += float(u.fan_w)
+		chw += float(u.cooling_w)
+		hw += float(u.heating_w)
+	for t in _term_list:
+		chw += float(t.cooling_w)
+		hw += float(t.heating_w)
+	var electric := fan + chw / CHILLER_COP
+	_power_w[0] = electric
+	_power_w[1] = chw
+	_power_w[2] = hw
+	var h := dt / 3600.0
+	_meters.seconds = float(_meters.seconds) + dt
+	_meters.fan_wh = float(_meters.fan_wh) + fan * h
+	_meters.chw_wh = float(_meters.chw_wh) + chw * h
+	_meters.hw_wh = float(_meters.hw_wh) + hw * h
+	_meters.electric_wh = float(_meters.electric_wh) + electric * h
+	_meters.gas_wh = float(_meters.gas_wh) + hw / BOILER_EFFICIENCY * h
+	_meters.peak_kw = maxf(float(_meters.peak_kw), electric / 1000.0)
+	if not people_present: return
+	for id in zones:
+		var z: Dictionary = zones[id]
+		if float(z.people_max) <= 0.0: continue
+		var m: Dictionary = _zone_meters.get(id, {})
+		if m.is_empty():
+			m = _new_zone_meter()
+			_zone_meters[id] = m
+		var temp := float(z.true_temp_c)
+		var warm := float(z.cool_setpoint_c) + COMFORT_BAND_K
+		var cold := float(z.heat_setpoint_c) - COMFORT_BAND_K
+		m.occ_s = float(m.occ_s) + dt
+		if temp <= warm and temp >= cold: m.ok_s = float(m.ok_s) + dt
+		if temp <= COMFORT_MAX_C and temp >= COMFORT_MIN_C: m.band_s = float(m.band_s) + dt
+		if float(z.co2_ppm) <= FRESH_AIR_CO2_PPM: m.air_s = float(m.air_s) + dt
+		m.warm_ks = float(m.warm_ks) + maxf(0.0, temp - warm) * dt
+		m.cold_ks = float(m.cold_ks) + maxf(0.0, cold - temp) * dt
 
 func _refresh_routes() -> void:
 	for route in _routes:
@@ -1385,6 +1626,8 @@ func _init_unit_state(u: Dictionary, start_c: float) -> void:
 	u.co2_supply_ppm = 450.0
 	u.fan_fault = false
 	u.filter_fault = false
+	u.chw_stuck = -1.0
+	u.oa_stuck = -1.0
 
 func _init_terminal_state(t: Dictionary, start_c: float) -> void:
 	for key in TERMINAL_STATE: t[key] = 0.0
@@ -1393,6 +1636,8 @@ func _init_terminal_state(t: Dictionary, start_c: float) -> void:
 	t.active_heat_c = UNOCC_HEAT_C
 	t.vmin_m3_s = 0.0
 	t.stuck = false
+	t.stuck_at = STUCK_DAMPER
+	t.reheat_stuck = -1.0
 
 func _zone_config(z: Dictionary, src: Dictionary, id: String) -> void:
 	var type := String(src.get("type", "room")) if src.get("type", "room") is String else "room"
@@ -1642,13 +1887,28 @@ func _update_fault_targets() -> void:
 					_fault_bias = String(id)
 					break
 			if _fault_bias.is_empty() and not zones.is_empty(): _fault_bias = String(zones.keys()[0])
+	var aimed: Dictionary = {} # "kind\ntarget" -> value
+	for f in _faults: aimed[String(f.kind) + "\n" + String(f.target)] = float(f.value)
 	for u in _unit_list:
-		u.fan_fault = String(u.id) == _fault_fan
-		u.filter_fault = String(u.id) == _fault_filter
+		var uid := String(u.id)
+		u.fan_fault = uid == _fault_fan or aimed.has("fan_failure\n" + uid)
+		u.filter_fault = uid == _fault_filter or aimed.has("dirty_filter\n" + uid)
+		u.chw_stuck = float(aimed.get("chw_valve_stuck\n" + uid, -1.0))
+		u.oa_stuck = float(aimed.get("oa_damper_stuck\n" + uid, -1.0))
+		if float(u.chw_stuck) >= 0.0 and bool(u.has_cooling): u.cooling_output = u.chw_stuck
+		if float(u.oa_stuck) >= 0.0 and bool(u.has_damper): u.damper_feedback = u.oa_stuck
 	for t in _term_list:
-		t.stuck = String(t.id) == _fault_damper
-		if bool(t.stuck): t.damper_feedback = STUCK_DAMPER
-	for z in _zone_list: z.bias_k = SENSOR_BIAS_K if not bool(z.dummy) and String(z.id) == _fault_bias else 0.0
+		var tid := String(t.id)
+		var stuck_key := "stuck_damper\n" + tid
+		t.stuck = tid == _fault_damper or aimed.has(stuck_key)
+		t.stuck_at = float(aimed.get(stuck_key, STUCK_DAMPER))
+		if bool(t.stuck): t.damper_feedback = t.stuck_at
+		t.reheat_stuck = float(aimed.get("reheat_stuck\n" + tid, -1.0))
+		if float(t.reheat_stuck) >= 0.0 and bool(t.has_reheat): t.reheat_output = t.reheat_stuck
+	for z in _zone_list:
+		var bias := SENSOR_BIAS_K if not bool(z.dummy) and String(z.id) == _fault_bias else 0.0
+		if not bool(z.dummy): bias += float(aimed.get("sensor_bias\n" + String(z.id), 0.0))
+		z.bias_k = bias
 
 # After reset/configure/restore/scenario: refresh derived values without
 # advancing time. Flows are only ever reduced here (never invented) so a

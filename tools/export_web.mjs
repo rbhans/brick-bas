@@ -28,4 +28,5 @@ await copyFile(resolve(root, 'ASSET_CREDITS.md'), resolve(output, 'ASSET_CREDITS
 await copyFile(resolve(root, 'assets/third_party/ldraw/CAlicense4.txt'), resolve(output, 'LDraw-LICENSE.txt'));
 await copyFile(resolve(root, 'assets/third_party/ldraw/selection.json'), resolve(output, 'LDraw-AUTHORS.json'));
 await copyFile(resolve(root, 'assets/third_party/kenney_interface/License.txt'), resolve(output, 'Audio-LICENSE.txt'));
+await copyFile(resolve(root, 'assets/fonts/geist/OFL.txt'), resolve(output, 'Font-LICENSE.txt'));
 console.log('Static web build ready in dist/web. Preview with npm run web:serve. No save server is required.');

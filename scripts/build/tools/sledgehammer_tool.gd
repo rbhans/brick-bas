@@ -51,6 +51,8 @@ func release(mouse: Vector2) -> void:
 	var targets: Array = doomed.duplicate()
 	if mouse.distance_to(press_screen) < 8.0 or targets.is_empty():
 		targets = [hovered] if not hovered.is_empty() else []
+	# In a career job only what the job lets you change can go.
+	targets = targets.filter(func(id: Variant) -> bool: return game.edit_block(game.edit_kind(String(id))).is_empty())
 	doomed.clear()
 	game.clear_marks()
 	if targets.is_empty():

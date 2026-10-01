@@ -15,6 +15,8 @@ const FILTER_DELAY_S := 120.0
 const DAMPER_MISMATCH := 0.20
 const DAMPER_DELAY_S := 180.0
 const COMM_DELAY_S := 30.0
+const SAT_HIGH_K := 3.0
+const SAT_HIGH_DELAY_S := 600.0
 const SEVERITY_RANK := {"critical": 0, "warning": 1, "notice": 2}
 
 var active: Dictionary = {}
@@ -38,8 +40,16 @@ func evaluate(simulation: RefCounted, dt: float) -> void:
 		var label := String(unit.get("label", id))
 		var failed := bool(unit.get("enabled", false)) and bool(unit.get("has_fan", false)) and not bool(unit.get("fan_running", false))
 		_evaluate(seen, "fan_failure:" + id, failed, dt, FAN_FAILURE_DELAY_S, label + ": supply fan commanded on without run proof", "critical")
+		# Filter ΔP falls with the square of airflow, so the alarm compares it
+		# at design airflow (a flow-reset ΔP limit) whenever enough air moves.
 		var filter_dp := float(unit.get("filter_dp_pa", 0.0))
-		_evaluate(seen, "filter:" + id, filter_dp > FILTER_DP_LIMIT_PA, dt, FILTER_DELAY_S, label + ": filter differential pressure high (%s)" % Units.pressure(filter_dp), "notice")
+		var flow := float(unit.get("flow_fraction", 0.0))
+		var loaded := filter_dp > FILTER_DP_LIMIT_PA or (flow >= 0.25 and filter_dp / (flow * flow) > FILTER_DP_LIMIT_PA)
+		_evaluate(seen, "filter:" + id, loaded, dt, FILTER_DELAY_S, label + ": filter differential pressure high (%s at %d%% airflow)" % [Units.pressure(filter_dp), roundi(flow * 100.0)], "notice")
+		var sat := float(unit.get("supply_temp_c", 0.0))
+		var sat_sp := float(unit.get("supply_setpoint_c", 99.0))
+		var sat_high := bool(unit.get("fan_proven", false)) and String(unit.get("mode", "")) == "Occupied" and sat > sat_sp + SAT_HIGH_K
+		_evaluate(seen, "sat_high:" + id, sat_high, dt, SAT_HIGH_DELAY_S, label + ": supply air temperature high (%s, set %s)" % [Units.temp(sat, 1), Units.temp(sat_sp, 1)], "warning")
 	for id in simulation.zone_ids():
 		var zone: Dictionary = simulation.zone_state(id)
 		if not bool(zone.get("served", false)): continue

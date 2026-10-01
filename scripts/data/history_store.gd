@@ -40,6 +40,23 @@ func _push(id: String, time: float, value: float) -> void:
 		times[id] = times[id].slice(-MAX_SAMPLES_PER_POINT)
 		values[id] = values[id].slice(-MAX_SAMPLES_PER_POINT)
 
+# Older samples from elsewhere (a station's history) ahead of what's been
+# sampled live: [[time, value], ...] oldest first.
+func prepend(point_id: String, samples: Array) -> void:
+	var t := PackedFloat32Array()
+	var v := PackedFloat32Array()
+	var first: float = times[point_id][0] if times.has(point_id) and not times[point_id].is_empty() else INF
+	for sample in samples:
+		if float(sample[0]) >= first: break
+		t.append(float(sample[0]))
+		v.append(float(sample[1]))
+	if t.is_empty(): return
+	if times.has(point_id):
+		t.append_array(times[point_id])
+		v.append_array(values[point_id])
+	times[point_id] = t.slice(-MAX_SAMPLES_PER_POINT)
+	values[point_id] = v.slice(-MAX_SAMPLES_PER_POINT)
+
 func mark_boundary(_reason: String, sim_time: float) -> void:
 	last_sample_time = -INF
 	for id in times:

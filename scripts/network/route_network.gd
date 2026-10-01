@@ -82,6 +82,17 @@ static func evaluate(objects: Array) -> Dictionary:
 					if edge_routes.has(edge): resources[edge_routes[edge]] = true
 			for resource in resources:
 				if limits.has(resource): limits[resource].weights[vav_id] = float(limits[resource].weights.get(vav_id, 0.0)) + 1.0 / diffusers.size()
+	# Ducts, fittings and diffusers are sized for the design airflow of the
+	# VAVs they carry (as an engineer would size them), so they only
+	# bottleneck when a piece is rated above that. Air handlers and VAVs keep
+	# their own ratings: an undersized unit is a real design choice.
+	for item in objects:
+		if String(item.kind) not in ["duct", "tee", "cross", "diffuser"] or not limits.has(String(item.id)): continue
+		var limit: Dictionary = limits[String(item.id)]
+		var design := 0.0
+		for vav in limit.weights:
+			if terminals.has(vav): design += float(limit.weights[vav]) * float(terminals[vav].capacity_m3_s)
+		limit.capacity_m3_s = maxf(float(limit.capacity_m3_s), design)
 	for id in routes: routes[id] = limits[id].duplicate(true)
 	return {"terminals": terminals, "units": units, "limits": limits, "routes": routes, "reachable_ports": reachable, "route_count": routes.size()}
 

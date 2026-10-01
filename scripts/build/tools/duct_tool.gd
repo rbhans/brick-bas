@@ -166,7 +166,7 @@ func press(_mouse: Vector2) -> void:
 	var result: Dictionary = game.apply("Duct run", [{"kind": "duct", "transform": {"position": [0, 0, 0], "rotation_y": 0.0}, "properties": props}])
 	game.flash(result.added)
 	game.play_sound("place")
-	game.set_status("Connected %s → %s" % [game.describe(String(props.start_port.owner)) if props.has("start_port") else "open end", game.describe(String(hover_port.owner))])
+	game.set_status("Connected %s to %s" % [game.describe(String(props.start_port.owner)) if props.has("start_port") else "open end", game.describe(String(hover_port.owner))])
 	anchor = Vector3.INF
 	waypoints.clear()
 	start_port.clear()

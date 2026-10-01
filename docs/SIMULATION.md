@@ -1,6 +1,6 @@
 # Demo building simulation
 
-Updated 2026-09-25. `scripts/sim/demo_simulation.gd` (`DemoSimulation`) is the data source for the demo: it turns whatever the player built into BAS point data that animates equipment and feeds thermostats, readouts and alarms. It is a deterministic, sensible-heat **gameplay** model. The aim is data that runs and responds like a real building on a BAS front end. It is not an energy model, sizing tool, commissioning sequence or code-compliance claim.
+Updated 2026-10-01. `scripts/sim/demo_simulation.gd` (`DemoSimulation`) is the data source for the demo: it turns whatever the player built into BAS point data that animates equipment and feeds thermostats, readouts and alarms. It is a deterministic, sensible-heat **gameplay** model. The aim is data that runs and responds like a real building on a BAS front end. It is not an energy model, sizing tool, commissioning sequence or code-compliance claim.
 
 ## At a glance
 
@@ -13,7 +13,10 @@ Updated 2026-09-25. `scripts/sim/demo_simulation.gd` (`DemoSimulation`) is the d
   - economizer first, then chilled water;
   - DCV minimum outdoor air.
 - Only installed components act. No fan means no airflow; no cooling coil means no mechanical cooling; no OA damper means no economizer or outdoor air; a VAV without a heating coil has no reheat.
-- Seven fault or special scenarios plus five weather scenarios. AlarmManager raises BAS-style alarms.
+- Seven fault or special scenarios plus five weather scenarios, and faults aimed at any one piece of equipment (`set_faults`). AlarmManager raises BAS-style alarms.
+- **BAS programming** the player can change (`set_controls`): occupied schedule, optimal start, SAT and duct-static resets or fixed values, economizer, DCV and VAV minimums. People keep their own 07:00–18:00 hours whatever the schedule says.
+- **Meters**: electricity (fans plus chilled water at a plant COP), gas (hot water at a boiler efficiency), cost, and per-room comfort (on setpoint, within 68–76.5 °F, CO₂ under 1,400 ppm) while people are in. Career jobs are graded on these.
+- Time-lapse up to 1800× (`MAX_SPEED`), still in fixed 1 s steps.
 - Cost: about 0.36 ms per 1 s step for 40 zones, 8 AHUs and 40 VAVs (0.009 ms per zone, desktop). Rebuilding a 1140-point snapshot takes about 0.9 ms and happens only after state changes.
 
 ## Driving it from the game
@@ -23,13 +26,23 @@ const STEP_SECONDS := 1.0
 const SCENARIOS := ["Normal weekday", "Hot afternoon", "Fan failure", "Damper stuck at 25%", "Dirty filter",
 	"Sensor bias", "Data interruption", "Cold morning", "Unoccupied", "Economizer day", "Heat wave"]
 var running: bool          # pause
-var speed: float           # 0..60 simulated seconds per real second
+var speed: float           # 0..MAX_SPEED (1800) simulated seconds per real second; checkpoints keep ≤ 60
 var sim_seconds: float     # starts 23400 (06:30); time of day = fmod(sim_seconds, 86400)
 var scenario: String
 
 func reset() -> void                                   # 06:30 Normal weekday; keeps topology and open doors
 func advance(real_delta: float) -> int                 # steps taken; ≤ 3600 per call, backlog beyond that is dropped
+func run_steps(count: int) -> void                     # steps regardless of pause/speed (game time-lapse)
 func step_for_test(seconds: float) -> void
+func set_time_of_day(seconds: float) -> void           # jump the clock (an initial condition)
+func set_controls(values: Dictionary) -> void          # BAS programming, validated and clamped
+func controls_state() -> Dictionary
+func set_faults(list: Array) -> void                   # [{kind, target, value}], replaces the list
+func clear_fault(target: String, kind := "") -> bool
+func faults() -> Array
+func reset_meters() -> void
+func energy() -> Dictionary     # hours, electric_kwh, fan_kwh, cooling_kwh, cooling_ton_h, heating_therms, cost_usd, electric_kw, gas_kw, peak_kw
+func comfort(zone_ids := []) -> Dictionary   # occupied_h, setpoint_pct, range_pct, air_pct, zones{id: {…, warm_kh, cold_kh}}
 func set_scenario(name: String) -> void
 func configure(topology: Dictionary) -> void
 func set_zone_setpoints(zone_id: String, cool_c: float, heat_c: float = NAN) -> void
@@ -44,7 +57,7 @@ func restore_checkpoint(state: Dictionary) -> void
 func zone_state(zone_id: String) -> Dictionary
 func unit_state(ahu_id: String) -> Dictionary
 func terminal_state(vav_id: String) -> Dictionary
-func weather() -> Dictionary    # outdoor_temp_c, solar_w_m2, occupied, time_of_day_s, clock "07:42", scenario, occupied_elapsed_s, irradiance_w_m2{N,E,S,W,horizontal}
+func weather() -> Dictionary    # outdoor_temp_c, solar_w_m2, occupied (HVAC schedule), people_present, day, time_of_day_s, clock "07:42", scenario, occupied_elapsed_s, irradiance_w_m2{N,E,S,W,horizontal}
 func zone_ids() -> Array        # sorted
 func unit_ids() -> Array
 func terminal_ids() -> Array
@@ -115,7 +128,7 @@ Propping the front door open at 14:00 on a Hot afternoon warms the lobby 0.8 K i
 
 ### Schedule and AHU modes
 
-Occupied is 07:00–18:00 (never in the Unoccupied scenario). Each AHU with a fan picks a mode every step:
+The HVAC occupied schedule is `occupied_start_h`–`occupied_end_h` (07:00–18:00 by default; never in the Unoccupied scenario). People, plug loads and the comfort meters follow the building's own hours, 07:00–18:00, whatever the schedule says. Each AHU with a fan picks a mode every step:
 
 | Mode | When | Fan | OA damper | SAT setpoint | VAV setpoints / minimum |
 | --- | --- | --- | --- | --- | --- |
@@ -126,7 +139,7 @@ Occupied is 07:00–18:00 (never in the Unoccupied scenario). Each AHU with a fa
 | Setback | unoccupied, a served zone < 16 °C | on | closed | 35 °C | heat to 18 / 0 |
 | Off | otherwise | off | closed | held | 16 / 29, VAVs closed |
 
-**Optimal start** runs from 05:00. Lead time is 15 min + 20 min per K of the worst served zone's error against its occupied setpoints, capped at 2 h. Once started it holds Warm-up or Cool-down until 07:00. At the 06:30 start a Normal-weekday building sits at 24 °C, so cool-down starts on the first step. A zone within 0.2 K of its setpoints does not trigger optimal start.
+**Optimal start** (when `optimal_start` is on) runs from 2 h before the schedule starts. Lead time is 15 min + 20 min per K of the worst served zone's error against its occupied setpoints, capped at 2 h. Once started it holds Warm-up or Cool-down until 07:00. At the 06:30 start a Normal-weekday building sits at 24 °C, so cool-down starts on the first step. A zone within 0.2 K of its setpoints does not trigger optimal start.
 
 ### VAV terminal (pressure independent, GL36-style dual maximum)
 
@@ -135,21 +148,21 @@ Occupied is 07:00–18:00 (never in the Unoccupied scenario). Each AHU with a fa
   - Cooling loop 0→100 % moves airflow from minimum to maximum (`capacity_m3_s`). This only happens while the supply air is cooler than the room, as in GL36; warm supply holds the minimum.
   - Heating loop 0–50 % holds minimum airflow and raises the discharge setpoint from supply temperature toward min(space + 11 K, 35 °C) with the reheat valve.
   - Heating loop 50–100 % raises airflow to the heating maximum (45 %). With warm AHU supply air (warm-up) the heating loop raises airflow directly.
-- **Minimum airflow.** Occupied minimum is 30 % of maximum. It rises toward 60 % as zone CO₂ goes from 1000 to 1400 ppm (ventilation reset). The minimum is 0 in every other mode.
+- **Minimum airflow.** Occupied minimum is `vav_min_fraction` of maximum (30 %). It rises toward 80 % as zone CO₂ goes from 1000 to 1400 ppm (ventilation reset). The minimum is 0 in every other mode.
 - **Damper.** Command = feedforward from duct static (box flow ∝ opening·√P, 1.25× oversized) plus a slow integral trim on the airflow error. A starved box, whether pressure-limited or duct-limited, drives open. The actuator strokes in 90 s with a 0.4 % deadband.
 - **Reheat valve** needs proven airflow. It is positioned for the discharge setpoint from a coil model: hot water at 60 °C, design rise 24 K at heating maximum, 60 s stroke. A terminal cooling coil (rare) cools after airflow, or on its own when the AHU air is warm.
 
 ### AHU
 
 - **Supply fan.** A VFD PI loop on duct static; the setpoint starts at 250 Pa. Minimum speed is 20 %; accel and decel take 30 s for 0→100 %. Run proof is a current switch at 10 % speed, and the fan counts as proven after 5 s.
-- **Static pressure trim & respond** (after 10 min in a mode, every 2 min). Range is 150–300 Pa: trim −6 Pa, respond +12 Pa per request up to +30 Pa. A VAV with its damper command above 95 % sends one pressure request, or two if it is below 70 % of its airflow setpoint. The number of ignored requests is 0, 1 or 2 by system size.
-- **SAT setpoint, occupied.** T&R over 12.8–18 °C: trim +0.1 K, respond −0.2 K per request up to −0.6 K. Cooling requests per zone:
+- **Static pressure trim & respond** (when `static_reset` is on; otherwise a fixed `static_fixed_pa`), after 10 min in a mode, every 2 min. Range is 150–300 Pa: trim −6 Pa, respond +12 Pa per request up to +30 Pa. A VAV with its damper command above 95 % sends one pressure request, or two if it is below 70 % of its airflow setpoint. The number of ignored requests is 0, 1 or 2 by system size.
+- **SAT setpoint, occupied.** With `sat_reset` off, a fixed `sat_fixed_c`. Otherwise T&R over 12.8–18 °C: trim +0.1 K, respond −0.2 K per request up to −0.6 K. Cooling requests per zone:
   - 3 requests if the zone is more than 3 K over its cooling setpoint;
   - 2 if more than 1.5 K over;
   - 1 if the cooling loop is above 95 %.
   The T&R value is then blended to 12.8 °C as OAT rises from 16 to 21 °C.
-- **Outdoor air.** Occupied minimum position is 20 %, rising to 50 % as the worst served zone's CO₂ goes from 700 to 1000 ppm (DCV). The damper is closed in every other mode unless economizing.
-- **Economizer.** Enabled when the fan is proven, a damper is installed, the mode is Occupied, Cool-down or Setup, and OAT is below min(21 °C high limit, return air) − 0.5 K (0.5 K hysteresis).
+- **Outdoor air.** Occupied minimum position is 20 %, rising to 70 % as the worst served zone's CO₂ goes from 700 to 1000 ppm (DCV). With `dcv` off it holds a 35 % design minimum. The damper is closed in every other mode unless economizing.
+- **Economizer.** Enabled (when `economizer` is on) when the fan is proven, a damper is installed, the mode is Occupied, Cool-down or Setup, and OAT is below min(21 °C high limit, return air) − 0.5 K (0.5 K hysteresis).
 - **SAT loop.** One PI loop (6 %/K, Ti 150 s) split into:
   - heating coil (−100…0);
   - economizer damper, minimum→100 % (0…50);
@@ -176,6 +189,8 @@ Per AHU, the fan curve (1000 Pa shutoff × N², 300 Pa droop at design) equals i
 | Duct to sensor | 120 |
 
 VAV boxes are orifices in parallel, which gives a closed-form flow and static each step.
+
+Ducts, tees, crosses and diffusers are sized for the design airflow of the VAVs they carry (`RouteNetwork` raises each one's limit to the sum of its share of downstream VAV capacities), so they only bottleneck when rated above that. Air handlers and VAVs keep their own ratings. The starters seed VAVs from each room's load (`ZonePlanner.design_airflow`: people, plug and lighting by room type, an envelope allowance and sun on exterior glass, over a 10 K supply difference) and air handlers at 0.95 × the VAVs they serve.
 
 Delivered flow is then capped, in order, by:
 1. each terminal's capacity;
@@ -253,6 +268,7 @@ Every point has `point_id`, `value`, `value_type` ("number", "bool" or "enum"), 
 | --- | --- |
 | `site.outdoor_temp` / `site.solar` / `site.time_of_day` | degC / W/m2 / h |
 | `site.occupied` | bool |
+| `site.electric_power` / `site.energy_cost` | kW / USD since the meters were reset |
 | `<zone>.space_temp`, `<zone>.co2` (every zone, conditioned or not) | degC, ppm |
 | `<ahu>.fan_enable_cmd`, `.fan_run_feedback`, `.economizer` | bool |
 | `<ahu>.fan_state` ("Running"/"Off"), `.mode` (Off/Occupied/Warm-up/Cool-down/Setback/Setup) | enum |
@@ -291,7 +307,8 @@ Animation bindings read:
 | --- | --- | --- | --- |
 | `fan_failure:<ahu>` | Fan enabled, no run proof | 20 s | critical |
 | `high_temp:<zone>` / `low_temp:<zone>` | Served zone more than 2 K beyond its active setpoint while occupied, after the first 30 min of occupancy | 300 s | warning |
-| `filter:<ahu>` | Filter ΔP above 180 Pa | 120 s | notice |
+| `filter:<ahu>` | Filter ΔP above 180 Pa, or above 180 Pa when scaled to design airflow (at ≥ 25 % flow) | 120 s | notice |
+| `sat_high:<ahu>` | Occupied, fan proven, supply air more than 3 K above its setpoint | 600 s | warning |
 | `damper:<vav>` | Connected VAV with \|command − feedback\| above 20 % | 180 s | warning |
 | `comm_failure` | Data interruption (other alarms are held while stale) | 30 s | critical |
 
@@ -299,9 +316,43 @@ API: `active`, `timers`, `list()` (active alarms as `{id, message, severity, ack
 
 ## Checkpoints
 
-`checkpoint()` saves version 3: time, scenario, speed, pause, accumulator, step counters and open doors. For every zone, dummy zone, AHU and VAV it saves all dynamic state: temperatures and mass, CO₂, setpoints, lighting override, loop integrators, actuator positions, trim & respond values, timers, filter loading and mode. It is plain JSON (string keys, finite numbers, bools, strings).
+`checkpoint()` saves version 4 (older versions still restore): BAS programming, targeted faults and meters, plus time, scenario, speed, pause, accumulator, step counters and open doors. For every zone, dummy zone, AHU and VAV it saves all dynamic state: temperatures and mass, CO₂, setpoints, lighting override, loop integrators, actuator positions, trim & respond values, timers, filter loading and mode. It is plain JSON (string keys, finite numbers, bools, strings).
 
 `restore_checkpoint()` is defensive: unknown ids and fields and invalid types are ignored, numbers are clamped to per-field ranges, and the setpoint deadband is enforced. Entries for ids that aren't configured yet are stashed and applied when `configure()` creates them, so restore-then-configure and configure-then-restore both work. Topology stays authoritative. Version-2 saves restore zone temperatures and setpoints from `rooms` (mass starts equal to air). An in-memory restore continues bit-identically; a JSON round trip continues to within rounding.
+
+## BAS programming
+
+`set_controls()` takes any of these keys. Unknown keys are ignored, numbers are clamped, and the schedule stays at least 30 min long.
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `occupied_start_h`, `occupied_end_h` | 7, 18 | HVAC occupied schedule (0–24 h). People keep 07:00–18:00. |
+| `optimal_start` | on | Early warm-up and cool-down before the schedule |
+| `sat_reset` / `sat_fixed_c` | on / 12.8 | SAT trim & respond, or a fixed supply setpoint (10–18 °C) |
+| `static_reset` / `static_fixed_pa` | on / 250 | Duct static trim & respond, or a fixed setpoint (100–500 Pa) |
+| `economizer` | on | Free cooling with outdoor air |
+| `dcv` | on | CO₂ demand ventilation; off holds 35 % minimum outdoor air |
+| `vav_min_fraction` | 0.3 | Occupied VAV minimum (0.1–0.8) |
+
+Wasteful programming costs real money. In the office on an economizer day, a 04:00–22:00 schedule, fixed 55 °F SAT, fixed 1.6 in. w.c. static, no economizer or DCV, and 60 % minimums cost about $13 a day against $2.80 with the defaults.
+
+## Targeted faults
+
+`set_faults([{kind, target, value}])` aims faults at single pieces of equipment, on top of any scenario fault. Faults whose target doesn't exist yet wait for it. `clear_fault(target, kind)` repairs one.
+
+| Kind | Target | Value | Effect |
+| --- | --- | --- | --- |
+| `fan_failure` | AHU | | Fan coasts to a stop while commanded on |
+| `dirty_filter` | AHU | | Filter loaded to 500 Pa at design flow |
+| `chw_valve_stuck` | AHU | position 0–1 | Cooling valve frozen |
+| `oa_damper_stuck` | AHU | position 0–1 | Outdoor-air damper frozen |
+| `stuck_damper` | VAV | position 0–1 | Damper frozen |
+| `reheat_stuck` | VAV | position 0–1 | Reheat valve frozen |
+| `sensor_bias` | zone | ±6 K | Space sensor reads off |
+
+## Meters
+
+Each step adds fan power, chilled-water and hot-water heat. `energy()` reports electricity (fans + chilled water ÷ COP 3.2), gas (hot water ÷ 0.85 boiler efficiency), and cost at $0.14/kWh and $1.15/therm. While people are in, `comfort()` counts each room's hours on setpoint (true temperature within ±1.1 K of its occupied setpoints), within 20–24.7 °C, and with CO₂ under 1,400 ppm. It also adds the kelvin-hours too warm or too cold.
 
 ## Limits (deliberate simplifications)
 
