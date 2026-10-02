@@ -2,6 +2,13 @@
 
 Updated: 2026-10-01
 
+## Released (2026-10-01)
+
+Everything in the sections below is live:
+- The game (commit `34fb33f`) is on robboborben.xyz/demos/brick-bas, served by the `brick-bas` Worker.
+- The project page at robboborben.xyz/projects/brick-bas (personal-site `59db80a`) describes Career mode and has eight new screenshots, captured with `tools/site_shots.gd`.
+- Gameplay videos are rendered from the current build: `tools/render_demo_video.sh` with `tools/career_video.gd` (a service call, ~50 s) and `tools/demo_video.gd` (Creative). They go to `docs/demo-video/`, which isn't committed.
+
 ## Current: flicker and Explore hiding (2026-10-01)
 
 - **Flicker (z-fighting)**: a new check, `tests/zfight.gd`, looks at everything the renderer draws, at triangle level and any orientation, procedural meshes included. The old `geometry_overlaps.gd` only saw upright LDraw boxes, and missed most of it. On first run it found 172, 395 and 809 overlapping pairs in the three starters. The causes:
@@ -17,7 +24,7 @@ Updated: 2026-10-01
   - `scripts/render/coplanar.gd` settles what's left. Where two pieces share a face plane, the smaller moves back 2.5 mm, too little to see. It runs per model when bricks are batched (with the walls, floors and furniture already there held still), and per equipment unit with its neighbours. Results are cached by content, so a rebuild only pays for what changed: cold, about +0.5 s for the school's equipment; an edit, a few ms.
 - **Result**: the three starters are down to 24, 34 and 85 pairs, nearly all slivers under 0.03 m². Measured as flicker you'd see (`tools/flicker_probe.gd`, a millimetre camera creep), the web renderer went from 1–2.5 % of pixels flipping per frame on ducts, fittings and VAVs to about 0 % on the VAV, fittings and lamp. Ducts are left with edge shimmer only, 0.1–0.3 %, no patches. On desktop it's 6–30× lower.
 - **Explore hiding**: overhead ducts, VAVs and fittings used to fade (web: vanish) whenever the minifigure was within 6.5 m horizontally, with one threshold both ways. A whole duct run blinked as you crossed it. Now a unit gives way only near the camera's line to the minifigure, hides within 1.1 m of it, and comes back after 0.6 s more than 2 m clear. Whatever you're about to use stays solid. `explore_mode.gd` checks it deterministically; without the hysteresis the duct blinks 12 times in 12 steps and the check fails.
-- Verification: unit 180, build tools 32, explore 31, browser saves 36, geometry 3, live station 30, career 295, simulation 291, z-fight (3 starters), bridge 8, all PASS. Not checked: the web build in a browser (the Compatibility renderer was measured natively).
+- Verification: unit 180, build tools 32, explore 31, browser saves 36, geometry 3, live station 30, career 295, simulation 291, z-fight (3 starters), bridge 8, all PASS. The web build is deployed and loads on the site with no console errors (the flicker numbers were measured with the Compatibility renderer natively).
 
 ## Current: UI execution pass (2026-10-01)
 

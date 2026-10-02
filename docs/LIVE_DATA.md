@@ -33,14 +33,14 @@ ORDs come back as `slot:/…`. Values are `{point, ok, value, display, status, t
 
 ## Using it
 
-1. **New game → Creative**, pick **Live Niagara station**, then a starter. Or use Menu → **Live station** at any time.
+1. **New game → Creative**, pick **Live Niagara station**, then a starter. Or use Menu → **Connect a live station** at any time.
 2. Enter the station's address, user and password (tick self-signed if it uses one), then **Connect**. **Try the demo station** starts `tools/demo_station.mjs` on this computer (a stand-in station with an AHU and three VAVs whose values move) and connects to it.
-3. Select a piece of equipment and open its details (⋯). On a live station they open on **Live station**: search or browse the station, open a controller's folder, and press **Auto-map from this folder**. `PointMatcher` reads the points list the way an integrator would. It matches `DamperPos`, `DMPR-FB`, `ZN-T`, `SA-FLOW`, `HwVlvPos`, `SupplyFanSpd` and similar names, prefers feedback to command, and never takes a setpoint. You can also select one point and **Link** it to a role.
+3. Select a piece of equipment and open its **Details**. On a live station they open on **Live station**: search or browse the station, open a controller's folder, and press **Auto-map from this folder**. `PointMatcher` reads the points list the way an integrator would. It matches `DamperPos`, `DMPR-FB`, `ZN-T`, `SA-FLOW`, `HwVlvPos`, `SupplyFanSpd` and similar names, prefers feedback to command, and never takes a setpoint. You can also select one point and **Link** it to a role.
 4. Linked points stream live: the unit animates, its card lists each reading and trends it (starting with four hours of the station's own history), and its room's temperature tints the BAS view against the 68–76.5 °F comfort range.
 
 Roles: fan, damper, cooling coil, heating coil, airflow, and room temperature (VAVs and thermostats; it drives the overlay and readouts, not motion). Units come from the station's facets, so a CFM airflow is scaled to the box's design CFM.
 
-**Back to the simulation** (or Menu → Simulation) switches back. Linked points stay saved and resume when you reconnect. Career jobs always run on the simulation.
+**Back to the simulation** (or Menu → **Use the simulation**) switches back. Linked points stay saved and resume when you reconnect. Career jobs always run on the simulation.
 
 ## Testing
 

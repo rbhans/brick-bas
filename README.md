@@ -48,11 +48,11 @@ Live data needs Node.js 20+ and `npm install` (the bridge and the vendored baskS
 - **Change a unit** from its card: *Edit components* opens the workbench (damper, filter, coils, fan, in any order). *Connect supply* re-hooks a loose piece, and *Open casing* shows the internals.
 - **Move** a unit and its ducts re-route with it. If it would land on another duct, the move is refused. **Delete** takes a unit's ducts with it; pulling a trunk cross out of a main re-joins the main.
 - **Duct run** is for hand-routing: click one socket, then another. **PageUp/PageDown** change elevation, and clicks add bends. A red **Reroute duct** marker flags a run that no longer clears.
-- **B** toggles the BAS overlay, which tints rooms by temperature against their setpoints. Select anything for a live readout and trend chart. The alarm button lists active alarms with **Show** and **Acknowledge**.
+- **B** toggles the BAS overlay, which tints rooms by temperature against their setpoints. Select anything for a live readout and trend chart. The alarm pill (bottom right) lists active alarms with **Show** and **Acknowledge**.
 - **Edit components** also sets an air handler's size (design airflow) and shows its installed price.
 - **Menu → BAS programming** changes the sequences: occupied schedule, optimal start, supply-air and static-pressure resets, economizer, demand ventilation, VAV minimums and room setpoints. The clock panel shows the building's power and energy cost.
 
-**Explore**: **WASD** walks, **Shift** runs, **Space** jumps, drag to look, wheel to zoom. Doors open as you walk into them and close behind you. **E** only offers things that really do something: sit down, adjust a thermostat (**+ / −** in 1 °F steps), open an AHU access door, lift a VAV's casing to watch its damper and reheat coil, or show the airflow at a diffuser (its prompt reads live CFM and supply temperature). Overhead ducts fade as you pass under them. **Tab** returns to Build.
+**Explore**: **WASD** walks, **Shift** runs, **Space** jumps, drag to look, wheel to zoom. Doors open as you walk into them and close behind you. **E** only offers things that really do something: sit down, adjust a thermostat (**+ / −** in 1 °F steps), open an AHU access door, lift a VAV's casing to watch its damper and reheat coil, or show the airflow at a diffuser (its prompt reads live CFM and supply temperature). Overhead ducts, VAVs and fittings get out of the way when they'd block the camera's view of the minifigure, and come back once you're clear. **Tab** returns to Build.
 
 Camera in Build/Equipment: right-drag orbits, middle-drag pans, wheel zooms toward the cursor, **WASD** pans, **Q/E** rotate 45°, **Home** frames the lot, **F** frames the selection.
 
@@ -72,7 +72,7 @@ Air only reaches a room through the ducts you actually connected: AHU outlet →
 
 Ducts and fittings are sized for the VAVs they carry, VAVs for their room's load, and air handlers for their VAVs (with a little diversity). Undersizing an air handler is a real design mistake on a hot afternoon.
 
-On desktop, the same equipment can run on a live Niagara station instead: Menu → **Live station**, or pick it when starting Creative. The bridge (`scripts/baskstream-bridge.mjs`) uses the baskStream SDK, is read-only, and keeps the password in memory only. The browser build runs on the simulation.
+On desktop, the same equipment can run on a live Niagara station instead: Menu → **Connect a live station**, or pick it when starting Creative. The bridge (`scripts/baskstream-bridge.mjs`) uses the baskStream SDK, is read-only, and keeps the password in memory only. The browser build runs on the simulation.
 
 ## Test
 
