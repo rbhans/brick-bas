@@ -12,6 +12,8 @@ const OPAQUE_SHADER := preload("res://scripts/render/brick_batch.gdshader")
 const GLASS_SHADER := preload("res://scripts/render/brick_glass.gdshader")
 const GHOST_SHADER := preload("res://scripts/render/brick_ghost.gdshader")
 const FLOATS := 20 # 12 transform + 4 colour + 4 custom
+const NEAR_CELL := 2.0
+const Coplanar := preload("res://scripts/render/coplanar.gd")
 
 static var opaque_material: ShaderMaterial
 static var glass_material: ShaderMaterial
@@ -24,6 +26,7 @@ var owners: Dictionary = {}   # owner id -> Array of [group key, index]
 var instances: Dictionary = {} # group key -> MultiMeshInstance3D
 var _tinted: Dictionary = {}
 var _hidden: Dictionary = {}
+var _near: Dictionary = {}     # 2 m cell -> Array of [group key, index, owner]: what's already here (absorb settles against it)
 
 static func materials() -> Array[ShaderMaterial]:
 	if opaque_material == null:
@@ -68,6 +71,7 @@ static func wall_custom(flag: int, edge_key: String) -> Color:
 	return Color(float(flag), 0.0 if edge_key.begins_with("x") else 1.0, center.x, center.z)
 
 func clear() -> void:
+	_near.clear()
 	if is_instance_valid(root):
 		root.free()
 	root = null
@@ -88,6 +92,9 @@ func add(owner: String, part: String, transform: Transform3D, tint: Variant, cus
 		if not owners.has(owner):
 			owners[owner] = []
 		owners[owner].append([key, records.size()])
+	for cell in _cells_of(transform * Bricks.bounds(part)):
+		if not _near.has(cell): _near[cell] = []
+		_near[cell].append([key, records.size(), owner])
 	records.append([transform, colour, custom])
 
 func place(owner: String, part: String, bottom: Vector3, tint: Variant, rotation_y: float = 0.0, custom: Color = Color(0, 0, 0, 0)) -> void:
@@ -99,22 +106,68 @@ func place(owner: String, part: String, bottom: Vector3, tint: Variant, rotation
 # Bakes every static LDraw piece under `node` into the batch. `space` is the
 # node the batch will be built under (build(space)); transforms are stored
 # relative to it, so batches can live under moved/rotated unit roots.
-func absorb(owner: String, node: Node, custom: Color = Color(0, 0, 0, 0), space: Node3D = null) -> void:
+# `settle`: settle flush faces between the pieces first (coplanar.gd); off
+# when the caller already did.
+func absorb(owner: String, node: Node, custom: Color = Color(0, 0, 0, 0), space: Node3D = null, settle := true) -> void:
+	var found: Array[MeshInstance3D] = []
+	_gather(node, found)
+	if found.is_empty():
+		return
+	# Settle flush faces between the model's own pieces (coplanar.gd), judged in
+	# the model's own frame so it settles the same way wherever it stands.
+	var frame := (node as Node3D).global_transform.affine_inverse() if node is Node3D else Transform3D.IDENTITY
+	var parts: Array = []
+	var local: Array = []
+	for mesh_node in found:
+		parts.append(String(mesh_node.get_meta("ldraw_part_id")))
+		local.append(frame * mesh_node.global_transform)
+	var fixes: Array[Transform3D] = []
+	if settle:
+		# What's already in the batch around the model (walls, floors, the
+		# furniture beside it) takes part too, but never moves. Only meaningful
+		# when this batch holds world transforms (space == null).
+		var bounds := AABB()
+		for index in range(found.size()):
+			var box := found[index].global_transform * Bricks.bounds(String(parts[index]))
+			bounds = box if index == 0 else bounds.merge(box)
+		if space == null:
+			var seen := {}
+			for cell in _cells_of(bounds.grow(0.01)):
+				for entry in _near.get(cell, []):
+					if String(entry[2]) == owner or seen.has(str(entry[0]) + "#" + str(entry[1])): continue
+					seen[str(entry[0]) + "#" + str(entry[1])] = true
+					var record_transform: Transform3D = groups[entry[0]].records[int(entry[1])][0]
+					var part := String(groups[entry[0]].part)
+					if not (record_transform * Bricks.bounds(part)).intersects(bounds.grow(0.01)): continue
+					parts.append(part)
+					local.append(frame * record_transform)
+		fixes = Coplanar.resolve(parts, local, found.size())
+	else:
+		fixes.resize(found.size())
+		fixes.fill(Transform3D.IDENTITY)
+	var into := space.global_transform.affine_inverse() if space != null else Transform3D.IDENTITY
+	for index in range(found.size()):
+		var mesh_node := found[index]
+		var material := mesh_node.material_override as StandardMaterial3D
+		add(owner, String(parts[index]), into * mesh_node.global_transform * fixes[index], material.albedo_color, custom)
+		mesh_node.get_parent().remove_child(mesh_node)
+		mesh_node.queue_free()
+
+func _cells_of(box: AABB) -> Array:
+	var cells: Array = []
+	for x in range(floori(box.position.x / NEAR_CELL), floori(box.end.x / NEAR_CELL) + 1):
+		for z in range(floori(box.position.z / NEAR_CELL), floori(box.end.z / NEAR_CELL) + 1):
+			cells.append(Vector2i(x, z))
+	return cells
+
+# The static LDraw pieces under `node`, children before parents (as before).
+func _gather(node: Node, found: Array[MeshInstance3D]) -> void:
 	for child in node.get_children():
 		if child.has_meta("dynamic") or (child is Node3D and not (child as Node3D).visible):
 			continue
-		absorb(owner, child, custom, space)
-	if node is MeshInstance3D and node.has_meta("ldraw_part_id") and node.visible:
-		var mesh_node := node as MeshInstance3D
-		var material := mesh_node.material_override as StandardMaterial3D
-		if material == null:
-			return
-		var transform := mesh_node.global_transform
-		if space != null:
-			transform = space.global_transform.affine_inverse() * transform
-		add(owner, String(node.get_meta("ldraw_part_id")), transform, material.albedo_color, custom)
-		mesh_node.get_parent().remove_child(mesh_node)
-		mesh_node.queue_free()
+		_gather(child, found)
+	if node is MeshInstance3D and node.has_meta("ldraw_part_id") and node.visible and (node as MeshInstance3D).material_override is StandardMaterial3D:
+		found.append(node as MeshInstance3D)
 
 func build(parent: Node3D, name: String = "Brick batch") -> void:
 	materials()

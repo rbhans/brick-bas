@@ -83,16 +83,17 @@ godot=/Applications/Godot.app/Contents/MacOS/Godot
 $godot --headless --path . --editor --import --quit
 $godot --headless --path . --script res://tests/run_tests.gd            # unit suite
 $godot --headless --path . --script res://tests/build_tools.gd          # build + HVAC tools via real input events
-$godot --headless --path . --script res://tests/explore_mode.gd         # starters seed connected HVAC; doors, seats, thermostats
+$godot --headless --path . --script res://tests/explore_mode.gd         # starters seed connected HVAC; doors, seats, thermostats; overhead HVAC gives way steadily
 $godot --headless --path . --script res://tests/browser_saves.gd        # save/import/migration
 $godot --headless --path . --script res://tests/simulation_fidelity.gd  # control sequences and physics
 $godot --headless --path . --script res://tests/geometry_overlaps.gd    # no coplanar bricks (z-fighting) in any starter
+$godot --headless --path . --script res://tests/zfight.gd               # nothing the renderer draws fights over a plane (lists what's left)
 $godot --headless --path . --script res://tests/career_mode.gd          # every career job played and won; targets match the sim
 $godot --headless --path . --script res://tests/live_station.gd         # live mode end to end against the demo station (needs Node)
 npm run test:bridge                                                     # the read-only bridge through the SDK
 ```
 
-`tools/compile_check.gd` loads every script to catch parse errors. `tools/ui_screens.gd` renders every UI state to PNGs, in creative, career and live sets (`--set=`; run it with a window). The UI's colours, type scale, spacing and button styles live in `scripts/ui/toy_theme.gd`. `tools/career_calibrate.gd` and `tests/career_mode.gd -- --calibrate` measure the energy and comfort numbers the jobs are tuned from.
+Gameplay videos: `tools/render_demo_video.sh [out.mp4] [session]` renders a scripted session with Godot's Movie Maker at 1080p60. The sessions drive the real UI with scripted mouse and keys: `res://tools/demo_video.gd` (Creative: build a room, zone it, walk in) and `res://tools/career_video.gd` (a Career service call from the job board to the results). `tools/compile_check.gd` loads every script to catch parse errors. `tools/flicker_probe.gd` measures flicker as you'd see it: it renders a duct, VAV, fittings and a lamp post while the camera creeps a millimetre a frame, and reports the pixels that flip (run it with a window, and with `--rendering-method gl_compatibility` for the web renderer). `scripts/render/coplanar.gd` is what keeps pieces off each other's planes. `tools/ui_screens.gd` renders every UI state to PNGs, in creative, career and live sets (`--set=`; run it with a window). The UI's colours, type scale, spacing and button styles live in `scripts/ui/toy_theme.gd`. `tools/career_calibrate.gd` and `tests/career_mode.gd -- --calibrate` measure the energy and comfort numbers the jobs are tuned from.
 
 Rendered captures: `Godot --path . -- --template=office --equipment --capture=/tmp/office.png`. Other flags (`--view=`, `--explore`, `--select=`, `--speed=`, `--walls=`) are parsed in `_ready()` of `scripts/game.gd`. `tools/bake_starter_cards.gd`, `tools/bake_arch_thumbnails.gd` and `tools/bake_catalog_thumbnails.gd` regenerate the UI thumbnails from the real assemblies.
 

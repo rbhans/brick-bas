@@ -2,6 +2,23 @@
 
 Updated: 2026-10-01
 
+## Current: flicker and Explore hiding (2026-10-01)
+
+- **Flicker (z-fighting)**: a new check, `tests/zfight.gd`, looks at everything the renderer draws, at triangle level and any orientation, procedural meshes included. The old `geometry_overlaps.gd` only saw upright LDraw boxes, and missed most of it. On first run it found 172, 395 and 809 overlapping pairs in the three starters. The causes:
+  - Every duct's lid tiles were exactly as wide as the shell, so their sides doubled its side walls along the whole top edge (the band you could see shimmering).
+  - At bends the shell's lid cut-outs were placed by fraction along mitred edges instead of distance along the run. On risers that left a 0.3 m overlap on one side and a hole on the other.
+  - Glass draws both sides, so its underside fought whatever it rested on: windows, the lamp, VAV and AHU glass.
+  - Pieces of one model sat flush: cupboard drawers, bookshelf books (they overlapped), AHU and VAV details, fitting lids and collars.
+  - Some furniture sat inside walls or the ceiling: the park bench backrest (0.2 m behind its own footprint), the whiteboard (0.3 m above the wall top) and the chalkboard (into the ceiling diffusers).
+- **Fixes**:
+  - Duct walls are now cut by distance along the run, and the outer side walls stop at the lid band.
+  - Glass is inset 3 mm (shader and material).
+  - Bench, bookshelf, whiteboard, chalkboard and lamp bulb recipes are corrected.
+  - `scripts/render/coplanar.gd` settles what's left. Where two pieces share a face plane, the smaller moves back 2.5 mm, too little to see. It runs per model when bricks are batched (with the walls, floors and furniture already there held still), and per equipment unit with its neighbours. Results are cached by content, so a rebuild only pays for what changed: cold, about +0.5 s for the school's equipment; an edit, a few ms.
+- **Result**: the three starters are down to 24, 34 and 85 pairs, nearly all slivers under 0.03 m². Measured as flicker you'd see (`tools/flicker_probe.gd`, a millimetre camera creep), the web renderer went from 1–2.5 % of pixels flipping per frame on ducts, fittings and VAVs to about 0 % on the VAV, fittings and lamp. Ducts are left with edge shimmer only, 0.1–0.3 %, no patches. On desktop it's 6–30× lower.
+- **Explore hiding**: overhead ducts, VAVs and fittings used to fade (web: vanish) whenever the minifigure was within 6.5 m horizontally, with one threshold both ways. A whole duct run blinked as you crossed it. Now a unit gives way only near the camera's line to the minifigure, hides within 1.1 m of it, and comes back after 0.6 s more than 2 m clear. Whatever you're about to use stays solid. `explore_mode.gd` checks it deterministically; without the hysteresis the duct blinks 12 times in 12 steps and the check fails.
+- Verification: unit 180, build tools 32, explore 31, browser saves 36, geometry 3, live station 30, career 295, simulation 291, z-fight (3 starters), bridge 8, all PASS. Not checked: the web build in a browser (the Compatibility renderer was measured natively).
+
 ## Current: UI execution pass (2026-10-01)
 
 Same toy-builder identity (charcoal cards, cream parts tray, yellow selection, red brand brick), built properly on one design system: `scripts/ui/toy_theme.gd` holds the palette, type scale, radii and every button, field, tab, list, scrollbar and dialog style, and all panels take their values from it.

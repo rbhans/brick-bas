@@ -287,7 +287,8 @@ static func _bookshelf(kit: Kit, colors: Array) -> void:
 		var floor_y := 0.1 + shelf * 1.2
 		for index in range(4):
 			var x := -0.8 + index * 0.21
-			kit.mid("3069b", Vector3(x, floor_y + 0.5, 0.05), spines[(index + shelf * 3) % spines.size()], Basis(Vector3.FORWARD, PI * 0.5) * Basis(Vector3.RIGHT, PI * 0.5))
+			# Spine out, thin side along the shelf: 0.21 m apart, they no longer overlap.
+			kit.mid("3069b", Vector3(x, floor_y + 0.5, 0.05), spines[(index + shelf * 3) % spines.size()], Basis(Vector3.BACK, PI * 0.5))
 		for level in range(2 - shelf):
 			kit.mid("33009-f1", Vector3(0.45, floor_y + 0.18 + level * 0.36, 0.0), spines[(level + 5) % spines.size()], Basis(Vector3.FORWARD, PI * 0.5) * Basis(Vector3.UP, PI))
 	# Trailing vine: over the shelf, hanging off the front.
@@ -372,20 +373,22 @@ static func _water_cooler(kit: Kit, colors: Array) -> void:
 static func _whiteboard(kit: Kit, colors: Array) -> void:
 	var board: Variant = colors[0]
 	var trim: Variant = colors[1]
+	# The board tops out at the 3.6 m wall top (it used to stand 0.3 m above it,
+	# through the ceiling diffusers).
 	for row in range(2):
-		kit.put("69729", Vector3(0, 1.9 + row * 1.0, 0), board, face(0))
-	kit.at("3666", Vector3(0, 1.2, 0.25), trim)
+		kit.put("69729", Vector3(0, 1.6 + row * 1.0, 0), board, face(0))
+	kit.at("3666", Vector3(0, 1.4, 0.25), trim)
 	kit.at("6636", Vector3(0, 3.4, 0.25), trim)
 	# Two sticky notes and a few marker lines (bars laid on the board).
-	kit.put("3070b", Vector3(-1.1, 3.0, 0.2), "yellow", face(0))
-	kit.put("3070b", Vector3(-1.1, 2.4, 0.2), "coral", face(0))
-	kit.mid("30374", Vector3(0.35, 3.0, 0.3), "dark_blue", Basis(Vector3.BACK, PI * 0.5))
-	kit.mid("87994", Vector3(0.1, 2.55, 0.3), "dark_blue", Basis(Vector3.BACK, PI * 0.5))
-	kit.mid("87994", Vector3(0.6, 2.1, 0.3), "red", Basis(Vector3.BACK, PI * 0.5))
-	kit.at("3023b", Vector3(0.85, 1.4, 0.25), "black")
-	kit.at("6141", Vector3(0.05, 1.4, 0.25), "red")
-	kit.at("6141", Vector3(-0.45, 1.4, 0.25), "medium_blue")
-	kit.box(Vector3(3.0, 2.2, 0.5), Vector3(0, 2.3, 0.25))
+	kit.put("3070b", Vector3(-1.1, 2.7, 0.2), "yellow", face(0))
+	kit.put("3070b", Vector3(-1.1, 2.1, 0.2), "coral", face(0))
+	kit.mid("30374", Vector3(0.35, 2.7, 0.3), "dark_blue", Basis(Vector3.BACK, PI * 0.5))
+	kit.mid("87994", Vector3(0.1, 2.25, 0.3), "dark_blue", Basis(Vector3.BACK, PI * 0.5))
+	kit.mid("87994", Vector3(0.6, 1.8, 0.3), "red", Basis(Vector3.BACK, PI * 0.5))
+	kit.at("3023b", Vector3(0.85, 1.6, 0.25), "black")
+	kit.at("6141", Vector3(0.05, 1.6, 0.25), "red")
+	kit.at("6141", Vector3(-0.45, 1.6, 0.25), "medium_blue")
+	kit.box(Vector3(3.0, 2.2, 0.5), Vector3(0, 2.5, 0.25))
 	kit.interact("whiteboard", Vector3(0, 1.6, 0.8), "Draw on the board")
 
 static func _tv(kit: Kit, colors: Array) -> void:
@@ -434,10 +437,11 @@ static func _teacher_desk(kit: Kit, colors: Array) -> void:
 
 static func _chalkboard(kit: Kit, colors: Array) -> void:
 	var slate: Variant = colors[0]
+	# Topping out at 3.6 m, under the ceiling diffusers rather than into them.
 	for row in range(4):
-		kit.put("4162", Vector3(0, 1.65 + row * 0.5, 0), slate, face(0))
-	kit.at("3460", Vector3(0, 1.2, 0.25), "medium_nougat")
-	kit.at("4162", Vector3(0, 3.4, 0.25), "medium_nougat")
+		kit.put("4162", Vector3(0, 1.6 + row * 0.5, 0), slate, face(0))
+	kit.at("3460", Vector3(0, 1.15, 0.25), "medium_nougat")
+	kit.at("4162", Vector3(0, 3.35, 0.25), "medium_nougat")
 	# Chalk "writing" and the eraser/chalk on the tray.
 	kit.mid("30374", Vector3(-0.9, 3.0, 0.3), "white", Basis(Vector3.BACK, PI * 0.5))
 	kit.mid("87994", Vector3(0.95, 3.0, 0.3), "white", Basis(Vector3.BACK, PI * 0.5))
@@ -814,8 +818,10 @@ static func _park_bench(kit: Kit, colors: Array) -> void:
 		kit.at("3005", Vector3(x, 2 * BRICK, -0.25), iron)
 	for z in [-0.25, 0.25]:
 		kit.at("2431", Vector3(0, BRICK, z), slats)
+	# The backrest stays inside the bench's own footprint (it used to stand 0.2 m
+	# behind it, inside whatever wall the bench was placed against).
 	for row in range(2):
-		kit.put("6636", Vector3(0, 1.1 + row * 0.55, -0.7), slats, face(0))
+		kit.put("6636", Vector3(0, 1.1 + row * 0.55, -0.49), slats, face(0))
 	for x in [-0.55, 0.55]:
 		kit.seat(Vector3(x, 0.8, -0.05), FACE_PLUS_Z)
 	kit.box(Vector3(3.0, 1.9, 1.0), Vector3(0, 0.95, 0))
@@ -825,7 +831,9 @@ static func _lamp_post(kit: Kit, colors: Array) -> void:
 	kit.at("11062", Vector3.ZERO, iron)
 	kit.at("4032a", Vector3(0, 4.2, 0), iron)
 	kit.at("3941", Vector3(0, 4.4, 0), "trans_clear")
-	kit.at("6141", Vector3(0, 4.45, 0), "trans_yellow" if Bricks.PALETTE.has("trans_yellow") else "trans_orange")
+	# The bulb, a touch narrower than the lamp brick's centre tube it sits in
+	# (at full size its sides share that tube's surface and flicker).
+	kit.put("6141", Vector3(0, 4.45, 0), "trans_yellow" if Bricks.PALETTE.has("trans_yellow") else "trans_orange", Basis.from_scale(Vector3(0.92, 1.0, 0.92)))
 	kit.at("4740", Vector3(0, 5.0, 0), iron)
 	kit.at("4589", Vector3(0, 5.2, 0), iron)
 	kit.box(Vector3(0.8, 5.8, 0.8), Vector3(0, 2.9, 0))

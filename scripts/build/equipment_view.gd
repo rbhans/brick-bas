@@ -8,14 +8,22 @@ extends Node3D
 const Ducts := preload("res://scripts/build/duct_geometry.gd")
 const DuctPorts := preload("res://scripts/build/duct_connections.gd")
 const Bindings := preload("res://scripts/data/animation_binding.gd")
+const Coplanar := preload("res://scripts/render/coplanar.gd")
 const EquipmentToolScript := preload("res://scripts/build/tools/equipment_tool.gd")
 const DuctToolScript := preload("res://scripts/build/tools/duct_tool.gd")
 const WorkbenchScript := preload("res://scripts/ui/workbench.gd")
 
 const KINDS := ["ahu", "vav", "diffuser", "tee", "cross", "tstat", "duct"]
-# Ceiling pieces that fade near the minifigure so the camera can see it.
+# Ceiling pieces that fade out of the camera's way to the minifigure.
 # Diffusers sit flush with the ceiling and stay put.
 const OVERHEAD := ["vav", "tee", "cross", "duct"]
+# A unit gives way once it comes within SIGHT_IN of the camera's line to the
+# minifigure (head or feet), and only comes back after being further than
+# SIGHT_OUT for RETURN_DELAY seconds, so walking along its edge doesn't make it
+# blink.
+const SIGHT_IN := 1.1
+const SIGHT_OUT := 2.0
+const RETURN_DELAY := 0.6
 const THERMOSTAT_HEIGHT := 1.55
 const CEILING_FACE := 3.6
 
@@ -47,7 +55,11 @@ var _mode := 0
 var _samples: Dictionary = {}
 var _overlays: Dictionary = {}
 var _fade: Dictionary = {}
+var _giving_way: Dictionary = {}  # id -> true while faded (desktop) or hidden (web)
+var _clear_for: Dictionary = {}   # id -> seconds it's been clear of the sight line
+var _bounds: Dictionary = {}      # id -> world AABB of an overhead unit
 var duct_paths: Dictionary = {}   # duct id -> Array[Vector3], cached per rebuild
+var _unbatched: Array[String] = [] # units built this rebuild, batched once all are settled
 
 func setup(owner: Node) -> void:
 	game = owner
@@ -77,10 +89,15 @@ func rebuild(objects: Array) -> void:
 	air.clear()
 	screens.clear()
 	_fade.clear()
+	_giving_way.clear()
+	_clear_for.clear()
+	_bounds.clear()
 	duct_paths.clear()
 	ceiling_studs.clear()
 	batches.clear()
 	var library := models()
+	var pending: Array[String] = []
+	_unbatched = pending
 	for item in objects:
 		if item.kind not in KINDS:
 			continue
@@ -111,8 +128,9 @@ func rebuild(objects: Array) -> void:
 					for node in [cover] + (cover as Node).find_children("*", "", true, false):
 						node.remove_meta("dynamic")
 			result.covers = []
-		# Static casing pieces draw as a handful of MultiMeshes per unit.
-		_batch_unit(id, root)
+		# Static casing pieces draw as a handful of MultiMeshes per unit (once
+		# every unit is built: see below).
+		pending.append(id)
 		if item.kind in ["vav", "diffuser", "tee", "cross"]:
 			for stud in Placement.footprint_studs(root.position, library.footprint(String(item.kind), item.properties), float(item.transform.get("rotation_y", 0.0))):
 				ceiling_studs[stud] = id
@@ -123,17 +141,29 @@ func rebuild(objects: Array) -> void:
 		elif item.kind in ["ahu", "vav"]:
 			_label(root, item, result)
 			_screen(id, result, 30)
+	# Settle flush faces between each unit's pieces, procedural ones included,
+	# before anything is batched (coplanar.gd).
+	for id in pending:
+		_bounds[id] = _unit_bounds(roots[id])
+	var furniture := {}
+	for item in objects:
+		if item.kind == "furniture": furniture[String(item.id)] = true
+	for id in pending:
+		Coplanar.settle(roots[id], _neighbours(id, pending, furniture))
+	for id in pending:
+		_batch_unit(id, roots[id])
+	_unbatched = []
 	if shared != null:
 		shared.build(self, "Equipment pieces")
 	_apply_mode_look()
 
 func _batch_unit(id: String, root: Node3D) -> void:
 	if shared != null:
-		shared.absorb(id, root)          # world space: the shared batch sits at the origin
+		shared.absorb(id, root, Color(0, 0, 0, 0), null, false) # world space: the shared batch sits at the origin
 		batches[id] = shared
 	else:
 		var batch := BrickBatch.new()
-		batch.absorb(id, root, Color(0, 0, 0, 0), root)
+		batch.absorb(id, root, Color(0, 0, 0, 0), root, false)
 		batch.build(root, "Static pieces")
 		batches[id] = batch
 	BrickBatch.merge_static(root)
@@ -302,7 +332,7 @@ func _build_duct(root: Node3D, item: Dictionary) -> void:
 			particles.append({"frame": section.transform, "phase": float(particle_index) / count, "length": length, "sign": direction_sign})
 	if particles.is_empty():
 		return
-	_batch_unit(String(item.id), root)
+	_unbatched.append(String(item.id))
 	var multimesh := MultiMesh.new()
 	multimesh.transform_format = MultiMesh.TRANSFORM_3D
 	multimesh.mesh = Bricks.mesh("3070b")
@@ -441,34 +471,101 @@ func _animate_doors(id: String, result: Dictionary, delta: float) -> void:
 		if not node.has_meta("base_basis"): node.set_meta("base_basis", node.basis)
 		node.basis = Basis((door.get("axis", Vector3.UP) as Vector3).normalized(), angle) * Basis(node.get_meta("base_basis"))
 
-# Overhead HVAC near the minifigure fades so the camera can always see them.
+# Overhead HVAC between the camera and the minifigure fades (desktop) or
+# hides (web) so the player stays in view.
 func _fade_overhead(delta: float) -> void:
-	var focus: Vector3 = game.explorer.focus_point()
+	var head: Vector3 = game.explorer.focus_point()
+	var feet := head - Vector3(0, 1.2, 0)
+	var eye: Vector3 = game.explorer.camera.global_position
 	# Whatever the player is about to use stays solid.
 	var targeted := String(game.explorer.target.get("id", ""))
 	for id in roots:
 		var item: Dictionary = game.model.find_object(String(id))
 		if item.is_empty() or String(item.kind) not in OVERHEAD:
 			continue
-		var root: Node3D = roots[id]
-		var near := false
-		if String(id) == targeted:
-			near = false
-		elif item.kind == "duct":
-			var path: Array = duct_paths.get(String(id), [])
-			for index in range(path.size() - 1):
-				var closest := Geometry3D.get_closest_point_to_segment(Vector3(focus.x, path[index].y, focus.z), path[index], path[index + 1])
-				if Vector2(closest.x - focus.x, closest.z - focus.z).length() < 6.5:
-					near = true
-					break
-		else:
-			near = Vector2(root.global_position.x - focus.x, root.global_position.z - focus.z).length() < 6.5
-		var goal := 0.82 if near else 0.0
+		var gap := INF if String(id) == targeted else _sight_gap(String(id), item, eye, head, feet)
+		var giving := bool(_giving_way.get(id, false))
+		if not giving and gap < SIGHT_IN:
+			giving = true
+		elif giving:
+			_clear_for[id] = float(_clear_for.get(id, 0.0)) + delta if gap > SIGHT_OUT else 0.0
+			if float(_clear_for[id]) >= RETURN_DELAY:
+				giving = false
+		if giving != bool(_giving_way.get(id, false)):
+			_giving_way[id] = giving
+			_clear_for[id] = 0.0
+		var goal := 0.82 if giving else 0.0
 		var current := float(_fade.get(id, 0.0))
-		var next := move_toward(current, goal, delta * 3.0)
+		var next := move_toward(current, goal, delta * (5.0 if giving else 2.5))
+		if not can_fade:
+			next = goal # the web renderer can't fade: show or hide outright
 		if next != current or not _fade.has(id):
 			_fade[id] = next
-			_set_transparency(root, next)
+			_set_transparency(roots[id], next)
+
+# How far a unit's surface is from the camera's lines to the minifigure.
+func _sight_gap(id: String, item: Dictionary, eye: Vector3, head: Vector3, feet: Vector3) -> float:
+	var best := INF
+	if String(item.kind) == "duct":
+		var path: Array = duct_paths.get(id, [])
+		for index in range(path.size() - 1):
+			for target in [head, feet]:
+				var points := Geometry3D.get_closest_points_between_segments(path[index], path[index + 1], eye, target)
+				best = minf(best, points[0].distance_to(points[1]) - Ducts.OUTER)
+		return best
+	var box: AABB = _bounds.get(id, AABB())
+	if box.size == Vector3.ZERO:
+		return INF
+	var radius := box.size.length() * 0.5
+	for target in [head, feet]:
+		best = minf(best, Geometry3D.get_closest_point_to_segment(box.get_center(), eye, target).distance_to(box.get_center()) - radius * 0.8)
+	return best
+
+# What a unit touches, for settling against: other units' pieces and the
+# furniture's bricks that meet one of its own pieces. They hold still; this
+# unit moves. (Walls and floors never share a face with equipment.)
+func _neighbours(id: String, units: Array[String], furniture: Dictionary) -> Array:
+	var box: AABB = (_bounds.get(id, AABB()) as AABB).grow(0.02)
+	var result: Array = []
+	if box.size == Vector3.ZERO:
+		return result
+	var own: Array[AABB] = []
+	for node in (roots[id] as Node).find_children("*", "MeshInstance3D", true, false):
+		own.append(((node as MeshInstance3D).global_transform * (node as MeshInstance3D).get_aabb()).grow(0.02))
+	var touches := func(other: AABB) -> bool:
+		if not box.intersects(other): return false
+		for mine in own:
+			if mine.intersects(other): return true
+		return false
+	for other in units:
+		if other == id or not box.intersects(_bounds.get(other, AABB())):
+			continue
+		for node in (roots[other] as Node).find_children("*", "MeshInstance3D", true, false):
+			var mesh_node := node as MeshInstance3D
+			if mesh_node.mesh != null and mesh_node.is_visible_in_tree() and touches.call(mesh_node.global_transform * mesh_node.get_aabb()):
+				result.append([mesh_node.mesh, mesh_node.global_transform, Coplanar._double_sided(mesh_node)])
+	var arch: BrickBatch = game.arch.batch
+	var seen := {}
+	for cell in arch._cells_of(box):
+		for entry in arch._near.get(cell, []):
+			if not furniture.has(String(entry[2])): continue
+			var key := str(entry[0]) + "#" + str(entry[1])
+			if seen.has(key): continue
+			seen[key] = true
+			var part := String(arch.groups[entry[0]].part)
+			var transform: Transform3D = arch.groups[entry[0]].records[int(entry[1])][0]
+			if touches.call(transform * Bricks.bounds(part)):
+				result.append([Bricks.mesh(part), transform, bool(arch.groups[entry[0]].glass)])
+	return result
+
+func _unit_bounds(root: Node3D) -> AABB:
+	var result := AABB()
+	var first := true
+	for node in root.find_children("*", "MeshInstance3D", true, false):
+		var box := (node as MeshInstance3D).global_transform * (node as MeshInstance3D).get_aabb()
+		result = box if first else result.merge(box)
+		first = false
+	return result
 
 func _set_transparency(node: Node, value: float) -> void:
 	if not can_fade and node is Node3D and node.get_parent() == self:
@@ -495,6 +592,8 @@ func _apply_mode_look() -> void:
 			if child is Label3D and child.has_meta("bas_tag"):
 				child.visible = _mode == 1 or game.overlay
 	_fade.clear()
+	_giving_way.clear()
+	_clear_for.clear()
 
 func update_cutaway(state: Dictionary) -> void:
 	for id in roots:

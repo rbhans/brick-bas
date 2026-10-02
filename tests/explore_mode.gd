@@ -116,6 +116,70 @@ func run() -> void:
 		expect(absf(drop_f - 1.0) < 0.05, "a nudge lowers the setpoint by 1 °F (dropped %.2f °F)" % drop_f)
 		expect(game.hud.thermostat_reading.text.ends_with("°F"), "the thermostat reads in °F (%s)" % game.hud.thermostat_reading.text)
 		game.hud.hide_thermostat()
+	await overhead_checks()
 	game.set_mode(0)
 	print("EXPLORE_MODE ", "PASS" if failures.is_empty() else "FAIL", " checks=", checks, " failures=", failures)
 	quit(0 if failures.is_empty() else 1)
+
+# Overhead HVAC gives way only when it's between the camera and the minifigure,
+# and doesn't blink on and off at the edge. The view is posed by hand and the
+# fading stepped at a fixed rate, so frame timing can't change the outcome.
+func overhead_checks() -> void:
+	game.start_new_game("school", false)
+	await process_frame
+	game.set_mode(2)
+	await frames(2)
+	var explorer: Node = game.explorer
+	explorer.set_physics_process(false)
+	var equipment: Node = game.equipment
+	# The longest straight duct run.
+	var best_id := ""
+	var best := [Vector3.ZERO, Vector3.ZERO]
+	for id in equipment.duct_paths:
+		var path: Array = equipment.duct_paths[id]
+		for index in range(path.size() - 1):
+			var a: Vector3 = path[index]
+			var b: Vector3 = path[index + 1]
+			if absf(a.y - b.y) < 0.01 and a.distance_to(b) > best[0].distance_to(best[1]):
+				best = [a, b]
+				best_id = String(id)
+	expect(not best_id.is_empty(), "the school has a horizontal duct run")
+	var middle: Vector3 = (best[0] + best[1]) * 0.5
+	var across: Vector3 = (best[1] - best[0]).normalized().cross(Vector3.UP).normalized()
+	# A steep view from just behind the minifigure, as when looking down at it.
+	var pose := func(offset: float) -> void:
+		explorer._focus = Vector3(middle.x, 1.5, middle.z) + across * offset
+		explorer.camera.global_position = explorer._focus + Vector3(0, 10.5, 0) - across * 2.5
+	var run_for := func(seconds: float) -> void:
+		for tick in range(roundi(seconds / 0.05)): equipment._fade_overhead(0.05)
+	var giving: Dictionary = equipment._giving_way
+	pose.call(0.0)
+	run_for.call(0.5)
+	expect(bool(giving.get(best_id, false)), "a duct between the camera and the minifigure gives way")
+	var far := 0
+	for id in equipment.duct_paths:
+		var near := false
+		for point in equipment.duct_paths[id]: near = near or Vector2((point as Vector3).x - middle.x, (point as Vector3).z - middle.z).length() < 16.0
+		if not near and not bool(giving.get(id, false)): far += 1
+	expect(far > 0, "ducts far from the minifigure stay in view")
+	# Step out from under it until it comes back: it needs to be clearly away.
+	var back_at := INF
+	for step in range(1, 60):
+		pose.call(step * 0.25)
+		run_for.call(0.25)
+		if not bool(giving.get(best_id, false)):
+			back_at = step * 0.25
+			break
+	expect(back_at < 12.0, "the duct comes back once the minifigure walks clear (at %.2f m)" % back_at)
+	# Pace back and forth across that edge: it shouldn't blink.
+	var flips := 0
+	var last := bool(giving.get(best_id, false))
+	for cycle in range(6):
+		for offset in [back_at - 0.6, back_at + 0.3]:
+			pose.call(offset)
+			run_for.call(0.25)
+			var now := bool(giving.get(best_id, false))
+			if now != last: flips += 1
+			last = now
+	expect(flips <= 1, "pacing at the edge doesn't make the duct blink (%d changes over 12 steps)" % flips)
+	explorer.set_physics_process(true)

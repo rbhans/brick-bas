@@ -42,7 +42,7 @@ static func path_shell(parent: Node3D, points: Array[Vector3], color: Color, sta
 		var intervals: Array[Vector2] = []
 		for index in range(maxi(0, int(floor(last - first)))):
 			var start := first + index
-			intervals.append(Vector2(start / length, (start + 1.0) / length))
+			intervals.append(Vector2(start, start + 1.0)) # metres along the segment
 			var plate := MeshInstance3D.new()
 			plate.name = "LDraw 3068b removable lid"
 			plate.mesh = LID
@@ -77,25 +77,54 @@ static func path_shell(parent: Node3D, points: Array[Vector3], color: Color, sta
 				var cap_joint := box(cover if sign > 0 else parent, Vector3(0.07, 0.05, OUTER * 2.0), Vector3.ZERO, rim)
 				cap_joint.transform = Transform3D(basis, anchor + up * sign * (OUTER + 0.025))
 				cap_joint.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# Ring corners: 0 (-up,-side) 1 (-up,+side) 2 (+up,+side) 3 (+up,-side); wall
+	# `face` runs from corner face to corner face + 1, so 2 is the top (the
+	# lids' side) and 0 the bottom (lidded too on upright runs).
 	for face in range(4):
 		var next := (face + 1) % 4
 		var surface := SurfaceTool.new()
 		surface.begin(Mesh.PRIMITIVE_TRIANGLES)
 		surface.set_smooth_group(-1)
 		for segment in range(points.size() - 1):
-			var spans: Array[Vector2] = [Vector2(0, 1)]
-			if face == 2 or (face == 0 and absf((points[segment + 1] - points[segment]).normalized().y) > 0.7):
-				spans.clear()
-				var previous := 0.0
-				for interval in plate_intervals[segment]:
-					if interval.x > previous:
-						spans.append(Vector2(previous, interval.x))
-					previous = interval.y
-				if previous < 1.0:
-					spans.append(Vector2(previous, 1.0))
-			for span in spans:
-				quad(surface, outer[segment][face].lerp(outer[segment + 1][face], span.x), outer[segment][face].lerp(outer[segment + 1][face], span.y), outer[segment][next].lerp(outer[segment + 1][next], span.y), outer[segment][next].lerp(outer[segment + 1][next], span.x))
-				quad(surface, inner[segment][next].lerp(inner[segment + 1][next], span.x), inner[segment][next].lerp(inner[segment + 1][next], span.y), inner[segment][face].lerp(inner[segment + 1][face], span.y), inner[segment][face].lerp(inner[segment + 1][face], span.x))
+			var origin := points[segment]
+			var axis := (points[segment + 1] - origin).normalized()
+			var upright := absf(axis.y) > 0.7
+			# Pieces of the run, by distance along it (a bend's mitred corners sit
+			# off the bend point, so a wall's edges don't start where the run
+			# does: cutting by fraction along them would miss the lids).
+			var pieces: Array = []
+			var at := -INF
+			for interval in plate_intervals[segment]:
+				pieces.append([at, interval.x, false])
+				pieces.append([interval.x, interval.y, true])
+				at = interval.y
+			pieces.append([at, INF, false])
+			for piece in pieces:
+				var lidded: bool = piece[2]
+				if lidded and (face == 2 or (face == 0 and upright)):
+					continue # the lid is this wall here
+				var from: float = piece[0]
+				var to: float = piece[1]
+				var f0 := _along(outer[segment][face], outer[segment + 1][face], origin, axis, from)
+				var f1 := _along(outer[segment][face], outer[segment + 1][face], origin, axis, to)
+				var n0 := _along(outer[segment][next], outer[segment + 1][next], origin, axis, from)
+				var n1 := _along(outer[segment][next], outer[segment + 1][next], origin, axis, to)
+				if lidded:
+					# Beside a lid the outer side wall stops at the lid band; the
+					# lid's own side is the wall there (two would flicker).
+					var trim := (OUTER - INNER) / (OUTER * 2.0)
+					if face == 1 or (face == 3 and upright):
+						n0 = n0.lerp(f0, trim)
+						n1 = n1.lerp(f1, trim)
+					if face == 3 or (face == 1 and upright):
+						f0 = f0.lerp(n0, trim)
+						f1 = f1.lerp(n1, trim)
+				quad(surface, f0, f1, n1, n0)
+				var i0 := _along(inner[segment][face], inner[segment + 1][face], origin, axis, from)
+				var i1 := _along(inner[segment][face], inner[segment + 1][face], origin, axis, to)
+				var j0 := _along(inner[segment][next], inner[segment + 1][next], origin, axis, from)
+				var j1 := _along(inner[segment][next], inner[segment + 1][next], origin, axis, to)
+				quad(surface, j0, j1, i1, i0)
 		for end in [0, points.size() - 1]:
 			# The mating socket already owns this annular face. Two coplanar
 			# caps here produce the flickering triangles at equipment joints.
@@ -103,7 +132,8 @@ static func path_shell(parent: Node3D, points: Array[Vector3], color: Color, sta
 				continue
 			if face == 2:
 				var intervals: Array = plate_intervals[0 if end == 0 else -1]
-				if not intervals.is_empty() and ((end == 0 and is_zero_approx(intervals[0].x)) or (end > 0 and is_equal_approx(intervals[-1].y, 1.0))):
+				var last_length := points[-1].distance_to(points[-2])
+				if not intervals.is_empty() and ((end == 0 and is_zero_approx(intervals[0].x)) or (end > 0 and is_equal_approx(intervals[-1].y, last_length))):
 					continue
 			quad(surface, inner[end][face], outer[end][face], outer[end][next], inner[end][next])
 		surface.generate_normals()
@@ -113,6 +143,16 @@ static func path_shell(parent: Node3D, points: Array[Vector3], color: Color, sta
 		mesh.set_meta("paint_role", "housing")
 		(cover if face == 2 else parent).add_child(mesh)
 	return cover
+
+# The point on a wall edge (p0 to p1) at `distance` along the run from
+# `origin`; -INF and INF are the edge's own (mitred) ends.
+static func _along(p0: Vector3, p1: Vector3, origin: Vector3, axis: Vector3, distance: float) -> Vector3:
+	if distance == -INF: return p0
+	if distance == INF: return p1
+	var s0 := axis.dot(p0 - origin)
+	var s1 := axis.dot(p1 - origin)
+	if is_equal_approx(s0, s1): return p0
+	return p0.lerp(p1, clampf((distance - s0) / (s1 - s0), 0.0, 1.0))
 
 static func plastic(color: Color) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()

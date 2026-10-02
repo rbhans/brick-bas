@@ -113,6 +113,10 @@ static func material(value: Variant, emission: float = 0.0) -> StandardMaterial3
 		result.metallic_specular = 0.7
 		result.cull_mode = BaseMaterial3D.CULL_DISABLED
 		result.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+		# Drawn from both sides: pull the surfaces in a touch so the far face
+		# never shares a plane with what the glass rests on (brick_glass.gdshader).
+		result.grow = true
+		result.grow_amount = -0.003
 	if emission > 0.0:
 		result.emission_enabled = true
 		result.emission = tint
