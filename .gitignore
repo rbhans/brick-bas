@@ -11,3 +11,5 @@ logs/
 # Large or superseded media kept out of the repo (pre-rework demo video, old evidence)
 docs/demo-video/
 artifacts/
+# Written by tools/render_demo_video.sh while it records
+override.cfg
