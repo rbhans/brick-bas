@@ -142,7 +142,7 @@ class Session {
 		const station = stationOrigin(request.station)
 		const password = String(request.password ?? '')
 		if (!request.username || !password) throw new BaskStreamError('bad_request', 'Enter the username and password.')
-		const client = await BaskStreamClient.connect({
+		const client = new BaskStreamClient({
 			station,
 			username: String(request.username),
 			// Kept only in this closure, in memory, so reconnects can log in again.
@@ -151,6 +151,16 @@ class Session {
 			reconnect: true,
 			timeoutMs: 20000,
 		})
+		// Required from the start: an unhandled 'error' event would end the process.
+		client.on('error', (error) => { if (this.client === client) this.status('connected', friendly(error)) })
+		try {
+			await client.open()
+		} catch (error) {
+			// open() can fail after the socket is up (capabilities): don't leave
+			// a session behind that would keep logging in on its own.
+			client.close()
+			throw error
+		}
 		// The game gave up (or went away) while the login was in flight.
 		if (generation !== this.generation || this.socket.readyState !== WebSocket.OPEN) {
 			client.close()
@@ -168,8 +178,6 @@ class Session {
 		client.on('reconnecting', ({ attempt, delayMs }) => this.status('reconnecting', `Reconnecting (attempt ${attempt}, next in ${Math.round(delayMs / 1000)} s)…`))
 		client.on('reconnected', () => this.status('connected'))
 		client.on('revoked', () => this.status('connected', 'The station revoked some live subscriptions.'))
-		// Required: an unhandled 'error' event would end the process.
-		client.on('error', (error) => this.status('connected', friendly(error)))
 		return { info: this.info }
 	}
 

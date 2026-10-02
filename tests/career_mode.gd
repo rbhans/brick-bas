@@ -87,6 +87,12 @@ func test_state() -> void:
 	expect(float(failed.earned) == 0.0 and not state.completed("t1_cold_start"), "a failed job pays nothing")
 	state.record("oncall_0", 2, 800.0)
 	expect(state.on_call_done == 1 and state.total_stars() == 3, "on-call calls pay but don't count toward rank stars")
+	expect(not state.results.has("oncall_0"), "on-call calls are counted, not kept as results")
+	var crowded := {"results": {"t1_hot_office": {"stars": 3}}}
+	for serial in range(600): crowded.results["oncall_%d" % serial] = {"stars": 2}
+	var reloaded := CareerState.new()
+	reloaded.from_dictionary(crowded)
+	expect(reloaded.stars_for("t1_hot_office") == 3 and reloaded.results.size() == 1, "old on-call entries can't crowd real jobs out of a save")
 	var loaded := CareerState.load_or_new(TEST_CAREER)
 	expect(loaded.total_stars() == 3 and absf(loaded.money - state.money) < 0.01 and loaded.on_call_done == 1, "career survives a save and load")
 	loaded.from_dictionary({"money": "lots", "results": {"x": {"stars": 99}, 7: {}, "y": "no"}, "company": ""})

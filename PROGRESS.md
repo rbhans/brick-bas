@@ -1,13 +1,54 @@
 # BRICK / BAS progress
 
-Updated: 2026-10-01
+Updated: 2026-10-02
 
-## Released (2026-10-01)
+## Released (2026-10-02)
 
 Everything in the sections below is live:
-- The game (commit `34fb33f`) is on robboborben.xyz/demos/brick-bas, served by the `brick-bas` Worker.
+- The game, with the bug-fix pass below, is on robboborben.xyz/demos/brick-bas, served by the `brick-bas` Worker. The project page didn't need changes.
 - The project page at robboborben.xyz/projects/brick-bas (personal-site `59db80a`) describes Career mode and has eight new screenshots, captured with `tools/site_shots.gd`.
 - Gameplay videos are rendered from the current build: `tools/render_demo_video.sh` with `tools/career_video.gd` (a service call, ~50 s) and `tools/demo_video.gd` (Creative). They go to `docs/demo-video/`, which isn't committed.
+
+## Current: bug-fix pass (2026-10-02)
+
+A review of the whole game (simulation, career, building and ducts, saves and live data, game flow and UI) found about 40 bugs. All are fixed except two left as they were (below), and each fix has a check that fails without it.
+
+- **Building and ducts**:
+  - Placing a VAV, tee, cross or diffuser on a working duct, or zoning a room through one, cut it and starved what it fed. Both are now refused, or planned around.
+  - With the air handler right by the building only the first room could be zoned: a main too short to splice into is now re-laid through a cross beside it (`ZonePlanner.tap_beside`). Starters seed exactly as before.
+  - A duct drawn from an inlet was saved backwards and didn't count as supply.
+  - An air handler claimed studs from the workbench's current design instead of its own.
+  - A thermostat by a room corner recorded the neighbouring wall.
+  - Ctrl+D on furniture errored. Ctrl+Z while carrying a piece, then clicking, errored.
+  - R on selected equipment threw its ghost to the screen's top-left corner.
+  - Turning a parking stall checked the wrong layer.
+  - A thermostat being moved stayed visible in its old spot.
+- **Simulation**:
+  - Alarms were judged once a frame, so a time-lapse frame credited its whole span to whatever held at its end: false "damper not following command" alarms at the schedule change. They're now judged every 10 steps (`game._run_steps`); the time-lapse is about 7 % slower.
+  - Window area was taken off exterior walls twice, so wall conduction was too low (or zero behind storefronts). Fixing it cost the office build-out's reference install about 3 points of comfort, so its comfort target goes from 82 % to 80 %.
+  - Trends kept the old run's samples after a reset or a verify run from midnight. They now start again when the clock goes back, and stale readings trend as gaps.
+- **Career**: on-call completions were each saved as a result, and after about 500 of them a reload dropped real jobs' stars (they're now only counted). Menu → Title screen left the job running out of reach; it now ends the job. Service-panel buttons stayed live after close-out. "Leave job" warned that a finished job wouldn't count.
+- **Saves and live data**:
+  - In the browser, Download backup did nothing, and Save never asked the browser to keep its storage.
+  - A failed station login could leave a half-open session that later took the bridge down.
+  - While a station reconnects its readings now go stale.
+  - Imports with non-boolean door states, or pieces far off the lot, are rejected; they used to break refreshes or make every edit flood-fill millions of cells.
+  - A station address with a login in it is refused instead of being saved with the build.
+  - Load during a job ended the job even when there was nothing to load.
+- **UI**:
+  - WASD typed into a field panned the camera.
+  - A number typed in BAS programming or the point-link ranges was ignored by Apply (buttons don't take focus). Apply also rounded every room's setpoint to whole °F.
+  - Explore's E and clicks used an air handler's first access door whatever you faced.
+  - A thermostat opened in Build stayed open in Explore and took the wheel.
+  - A typed room name, committed by selecting something else, rebuilt the card inside its own rebuild, doubling its buttons.
+  - The workbench errored if its unit was deleted while it was open.
+  - The Details drawer didn't follow the selection.
+  - Menu checkboxes didn't show saved settings.
+  - A refused mode switch lit its tab, and an orbit drag could stick across a mode switch.
+- **Docs**: the bridge token (an environment variable, not `--token`), the CO₂ VAV reset (80 %), and two Career details.
+- **Left as is**: career results still don't keep per-job comfort and cost; nothing reads them. In some layouts, zoning the farthest room first can still leave the in-between rooms unzonable. It now fails with a message instead of cutting a duct.
+
+Verification (2026-10-02): unit 183, build tools 50, explore 31, UI checks 22 (new: `tests/ui_checks.gd`), browser saves 44, geometry 3, z-fight, simulation fidelity 291, career 297, live station 30, bridge 9 and worker tests all pass with no script errors. The new checks were run against the previous commit and fail there.
 
 ## Current: flicker and Explore hiding (2026-10-01)
 

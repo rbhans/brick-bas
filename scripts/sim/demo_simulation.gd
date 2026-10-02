@@ -358,14 +358,18 @@ func set_time_of_day(seconds: float) -> void:
 # Fixed 1 s steps: identical results at any speed. A backlog beyond the cap is
 # dropped rather than replayed (a long hitch must not freeze the game).
 func advance(real_delta: float) -> int:
+	var count := due_steps(real_delta)
+	run_steps(count)
+	return count
+
+# The steps real_delta is worth at the current speed, taken off the
+# accumulator but not run: for callers that run them in chunks.
+func due_steps(real_delta: float) -> int:
 	if not running or not is_finite(real_delta) or real_delta <= 0.0: return 0
 	var rate := clampf(speed, 0.0, MAX_SPEED) if is_finite(speed) else 0.0
 	accumulator += real_delta * rate
-	var count := 0
-	while accumulator >= STEP_SECONDS and count < MAX_STEPS_PER_ADVANCE:
-		_step()
-		accumulator -= STEP_SECONDS
-		count += 1
+	var count := int(minf(floorf(accumulator / STEP_SECONDS), float(MAX_STEPS_PER_ADVANCE)))
+	accumulator -= float(count) * STEP_SECONDS
 	if accumulator >= STEP_SECONDS: accumulator = 0.0
 	return count
 

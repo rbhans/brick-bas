@@ -20,7 +20,9 @@ func _init(owner: Node, tool_params: Dictionary = {}) -> void:
 	params = tool_params
 
 func enter() -> void:
-	hover(game.get_viewport().get_mouse_position())
+	# Remembered so a key pressed before the mouse moves (R) re-hovers here.
+	last_mouse = game.get_viewport().get_mouse_position()
+	hover(last_mouse)
 
 func exit() -> void:
 	clear_ghost()

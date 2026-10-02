@@ -266,6 +266,15 @@ func test_history_boundaries() -> void:
 	expect(not history.sample(points, 10.0), "history must honor its 30-second sampling interval")
 	history.mark_boundary("reset", 20.0)
 	expect(bool(history.get_series("room.temp")[-1].boundary), "reset/source changes must create a history boundary")
+	# The clock going back (a reset to 06:30) starts the trend again rather
+	# than leaving the old run's samples ahead of now.
+	for minute in range(1, 30): history.sample(points, 600.0 + minute * 60.0)
+	history.sample(points, 300.0)
+	var series: Array = history.get_series("room.temp")
+	expect(series.size() == 1 and float(series[0].time) == 300.0, "a clock that goes back clears the samples ahead of it")
+	var stale: Array[Dictionary] = [{"point_id": "room.temp", "value": 22.0, "quality_flags": ["stale", "communication_failure"]}]
+	history.sample(stale, 400.0)
+	expect(bool(history.get_series("room.temp")[-1].boundary), "a stale reading trends as a gap, not as data")
 
 # Bridge values become game points (the shape bindings, trends and the store use).
 func test_live_point_normalization() -> void:
@@ -288,6 +297,11 @@ func test_live_point_normalization() -> void:
 	dying._pending = {"hello-1": {"op": "hello", "callback": dying._on_hello, "sent": 0}, "connect-2": {"op": "connect", "callback": dying._on_connected, "sent": 0}}
 	dying._fail("Bridge closed")
 	expect(dying.state == "error" and dying.message == "Bridge closed" and dying._pending.is_empty(), "losing the bridge mid-login fails once, without recursing")
+	var away := LiveStationScript.new()
+	away.state = "ready"
+	away.points = {String(good.point_id): good}
+	away._handle(JSON.stringify({"op": "status", "status": "reconnecting", "message": "Connection lost. Reconnecting…"}))
+	expect(away.state == "reconnecting" and away.points[good.point_id].quality_flags == ["stale"] and good.quality_flags == ["good"], "while the station is away its last readings are stale")
 	var live := LiveStationScript.new()
 	expect(live.connection_state() == "offline" and live.snapshot().is_empty(), "a new live provider starts offline")
 	live.watch(["slot:/a", "slot:/b"])

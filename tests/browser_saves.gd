@@ -15,7 +15,10 @@ func _init() -> void:
 	var loaded := Model.new()
 	expect(loaded.from_dictionary(good), "current starter schema accepted")
 	var before: Dictionary = loaded.to_dictionary().duplicate(true)
-	for mutation in ["version", "array", "object", "transform", "position", "duplicate", "paint", "binding", "camera", "checkpoint", "component", "path", "numeric", "edge", "kind", "names"]:
+	var floor_index := -1
+	for index in range(good.objects.size()):
+		if good.objects[index].kind == "floor" and good.objects[index].properties.has("cell"): floor_index = index
+	for mutation in ["version", "array", "object", "transform", "position", "duplicate", "paint", "binding", "camera", "checkpoint", "component", "path", "numeric", "edge", "kind", "names", "door_state", "far_cell", "far_edge", "far_position"]:
 		var bad: Dictionary = good.duplicate(true)
 		match mutation:
 			"version": bad.version = 999
@@ -34,6 +37,12 @@ func _init() -> void:
 			"component": bad.objects[0].properties.component_records = ["bad"]
 			"path": bad.objects[0].properties.waypoints = [[1]]
 			"numeric": bad.objects[0].transform.rotation_y = INF
+			# These passed validation, then broke every refresh or made every
+			# edit flood-fill millions of cells.
+			"door_state": bad.site.open_doors = {"door-1": "yes"}
+			"far_cell": bad.objects[floor_index].properties.cell = [2500, 2500]
+			"far_edge": bad.objects[0].properties.edge = "x:5000:0"
+			"far_position": bad.objects[0].transform.position = [90000.0, 0.0, 0.0]
 		expect(not loaded.from_dictionary(bad), mutation + " rejected")
 		expect(loaded.to_dictionary() == before, mutation + " does not partially replace the current build")
 	good.connections = [{"id": "example", "station_url": "https://example.invalid", "username": "test", "password": "never-persist-this", "cookie": "never-persist-this"}]

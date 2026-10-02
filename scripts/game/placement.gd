@@ -85,7 +85,11 @@ func rebuild(objects: Array, index: BuildingIndex) -> void:
 			_claim_wall(item)
 			continue
 		var layer := surfaces if bool(item_spec.get("surface", false)) else studs
-		for stud in footprint_studs(_position(item), item_spec.footprint, float(item.transform.get("rotation_y", 0.0))):
+		var size: Vector2i = item_spec.footprint
+		var models := equipment_models()
+		if kind == "ahu" and models != null:
+			size = models.footprint(kind, item.properties)   # its own bays, not the workbench design
+		for stud in footprint_studs(_position(item), size, float(item.transform.get("rotation_y", 0.0))):
 			layer[stud] = String(item.id)
 
 func _claim_wall(item: Dictionary) -> void:

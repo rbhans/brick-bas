@@ -425,6 +425,7 @@ func _start_job(job: Dictionary) -> void:
 
 func show_results(result: Dictionary) -> void:
 	clear()
+	welcome = false # a job was being played: there's a game behind this page
 	var stars := int(result.stars)
 	var done := stars > 0
 	var head := UIKit.column(body, 8)

@@ -109,7 +109,8 @@ func press(_mouse: Vector2) -> void:
 	game.flash(result.added)
 	game.play_sound("place")
 	if bool(params.get("once", false)):
-		game.select(String(result.added[0].id))
+		if not result.added.is_empty():
+			game.select(String(result.added[0]))
 		game.finish_tool()
 
 func key(event: InputEventKey) -> bool:

@@ -344,6 +344,11 @@ func _commit() -> void:
 	view.workbench_config[kind] = config()
 	if not editing_id.is_empty():
 		var item: Dictionary = game.model.find_object(editing_id).duplicate(true)
+		if item.is_empty():
+			# Deleted or undone while the workbench was open.
+			game.set_status("That unit is gone, so there's nothing to rebuild.")
+			close()
+			return
 		item.properties.merge(config(), true)
 		game.apply("Edit " + String(item.properties.get("label", kind)), [], [], [item])
 		game.set_status("%s rebuilt with %d sections" % [String(item.properties.get("label", kind)), layout.size()])

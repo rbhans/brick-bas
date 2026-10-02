@@ -11,7 +11,7 @@ const VERSION := 1
 var path := PATH # tests point this elsewhere
 var company := "Brick & Mortar Mechanical"
 var money := 0.0
-var results: Dictionary = {}  # job id -> {"stars", "payout", "best_comfort", "best_cost", "plays"}
+var results: Dictionary = {}  # job id -> {"stars", "plays", "last_comfort_pct", "last_cost_usd"}; catalog jobs only
 var on_call_done := 0
 
 func stars_for(job_id: String) -> int:
@@ -47,7 +47,9 @@ func record(job_id: String, stars: int, fee: float, stats: Dictionary = {}) -> D
 	entry.plays = int(before.get("plays", 0)) + 1
 	for key in ["comfort_pct", "cost_usd"]:
 		if stats.has(key): entry["last_" + key] = float(stats[key])
-	if not job_id.begins_with("oncall") or stars > 0:
+	# On-call calls are endless and only counted (on_call_done): an entry each
+	# would eventually crowd the catalog jobs out of the saved results.
+	if not job_id.begins_with("oncall"):
 		results[job_id] = entry
 	save()
 	return {"earned": earned, "new_stars": maxi(0, stars - old_stars)}
@@ -66,7 +68,7 @@ func from_dictionary(data: Dictionary) -> void:
 	if data.get("results") is Dictionary:
 		for id in data.results:
 			var entry: Variant = data.results[id]
-			if not (id is String) or not entry is Dictionary or results.size() >= 500: continue
+			if not (id is String) or String(id).begins_with("oncall") or not entry is Dictionary or results.size() >= 500: continue
 			var stars := int(entry.get("stars", 0)) if (entry.get("stars") is float or entry.get("stars") is int) else 0
 			results[String(id)] = {"stars": clampi(stars, 0, 3), "plays": clampi(int(entry.get("plays", 1)) if (entry.get("plays") is float or entry.get("plays") is int) else 1, 0, 100000)}
 			for key in ["last_comfort_pct", "last_cost_usd"]:

@@ -28,6 +28,9 @@ var entries: Array = []
 var removed: Array = []    # existing objects the plan replaces
 var unhooked: Array[String] = []   # pieces a move left without a connection
 var blocked: Array[String] = []    # runs a move would cut through
+var keep_clear: Dictionary = {}    # sound ducts (ids) a player's plan mustn't cut through
+var _kept_for: Dictionary = {}     # the keep_clear _kept_paths was built for
+var _kept_paths: Dictionary = {}   # its ducts' paths (id -> Array[Vector3])
 var index: BuildingIndex
 var library: Script
 var make_id: Callable
@@ -112,6 +115,7 @@ func zone(room: Dictionary, label: String, layout: Array = ["damper", "heating_c
 	if candidates.is_empty() and mains.is_empty():
 		error = "No air to connect to yet. Place an air handler first."
 		return {}
+	keep_clear = ducts_ok()
 	for candidate in candidates.slice(0, 4):
 		if float(candidate.distance) > NEAR_SOCKET: break
 		var vav := zone_from(room, candidate.item, String(candidate.port), label, layout)
@@ -133,6 +137,18 @@ func zone(room: Dictionary, label: String, layout: Array = ["damper", "heating_c
 		var vav := zone_from(room, candidate.item, String(candidate.port), label, layout)
 		if not vav.is_empty():
 			return vav
+	# Mains too short to splice into: re-lay one through a cross beside it
+	# (by the air handler, or toward the room, in turn).
+	excluded.clear()
+	for attempt in range(4):
+		var tapped := tap_beside(mains, center, excluded, attempt % 2 == 0)
+		if tapped.is_empty(): break
+		for branch in _branches_toward(tapped.cross, center):
+			var vav := zone_from(room, tapped.cross, branch, label, layout)
+			if not vav.is_empty():
+				return vav
+		excluded.append(tapped.cross.transform.position)
+		untap(tapped)
 	if error.is_empty():
 		error = "Couldn't reach %s from the ductwork. Try moving the air handler closer." % String(room.label)
 	return {}
@@ -186,6 +202,16 @@ func connect_inlet(item: Dictionary) -> bool:
 				return true
 		excluded.append(tapped.cross.transform.position)
 		untap(tapped)
+	if not diffuser:
+		excluded.clear()
+		for attempt in range(2):
+			var tapped := tap_beside(ducts, point, excluded)
+			if tapped.is_empty(): break
+			for branch in _branches_toward(tapped.cross, point):
+				if not route(tapped.cross, branch, item, "inlet").is_empty():
+					return true
+			excluded.append(tapped.cross.transform.position)
+			untap(tapped)
 	# A diffuser that can't tap in joins its VAV's layout: the VAV's
 	# discharge is re-planned to feed every diffuser it serves.
 	if diffuser and not serving.is_empty():
@@ -242,7 +268,7 @@ func _feed_rearranged(vav: Dictionary, keep: String, movable: Array) -> bool:
 	for ahead in [1.5, 2.0, 2.5, 3.0]:
 		var point: Vector3 = snap(mouth + along * ahead, kind, props, rotation)
 		point.y = DuctPorts.ROUTE_HEIGHT - port_height(kind, props, "inlet")
-		if _overlaps_ceiling(point, footprint(kind, props), rotation):
+		if _overlaps_ceiling(point, footprint(kind, props), rotation) or _sits_on_run(kind, props, point, rotation):
 			continue
 		var mark := _mark()
 		var fitting := _add(kind, point, rotation, props.duplicate())
@@ -255,7 +281,7 @@ func _feed_rearranged(vav: Dictionary, keep: String, movable: Array) -> bool:
 			if not _replace_off_port(lifted[id], fitting, free, room):
 				placed_all = false
 				break
-		if placed_all:
+		if placed_all and _clear():
 			return true
 		_rollback(mark)
 	return false
@@ -297,11 +323,11 @@ func _feed_through_fitting(vav: Dictionary, ids: Array) -> bool:
 			var back := (mouth - point) * Vector3(1, 0, 1)
 			var n := Vector3(signf(back.x), 0, 0) if absf(back.x) >= absf(back.z) else Vector3(0, 0, signf(back.z))
 			var rotation := atan2(-n.x, -n.z) if kind == "tee" else atan2(n.z, -n.x)
-			if _overlaps_ceiling(point, footprint(kind, props), rotation):
+			if _overlaps_ceiling(point, footprint(kind, props), rotation) or _sits_on_run(kind, props, point, rotation):
 				continue
 			var mark := _mark()
 			var fitting := _add(kind, point, rotation, props.duplicate())
-			if not route(vav, "outlet", fitting, "inlet").is_empty() and _feed_each(fitting, ids):
+			if not route(vav, "outlet", fitting, "inlet").is_empty() and _feed_each(fitting, ids) and _clear():
 				return true
 			_rollback(mark)
 	return false
@@ -431,7 +457,7 @@ func tap(ducts: Array, toward: Vector3, excluded: Array = []) -> Dictionary:
 		if tried.has(key) or excluded.any(func(at: Array) -> bool: return Vector3(float(at[0]), float(at[1]), float(at[2])).distance_to(center) < 0.5):
 			continue
 		tried[key] = true
-		if _overlaps_ceiling(center, footprint("cross", fitting), rotation):
+		if _overlaps_ceiling(center, footprint("cross", fitting), rotation) or _sits_on_run("cross", fitting, center, rotation, String(duct.id)):
 			continue
 		var start: Dictionary = duct.properties.start_port
 		var finish: Dictionary = duct.properties.end_port
@@ -443,12 +469,96 @@ func tap(ducts: Array, toward: Vector3, excluded: Array = []) -> Dictionary:
 		var cross := _add("cross", center, rotation, fitting.duplicate())
 		var first := route(upstream, String(start.port), cross, "inlet")
 		var second := route(cross, "outlet", downstream, String(finish.port)) if not first.is_empty() else {}
-		if not second.is_empty():
+		if not second.is_empty() and _clear():
 			return {"cross": cross, "ducts": [first, second], "replaced": duct}
+		if not second.is_empty(): _drop(second)
 		if not first.is_empty(): _drop(first)
 		_drop(cross)
 		_unremove(duct)
 	return {}
+
+# With no straight stretch long enough to splice into (an air handler right
+# by the building feeding its first VAV), the run is re-laid through a cross
+# set beside it: upstream -> cross -> downstream, both branches free. Spots
+# near the run's source come first (a trunk off the unit), else those nearest
+# `toward`. Same result shape as tap().
+func tap_beside(ducts: Array, toward: Vector3, excluded: Array = [], near_source: bool = true) -> Dictionary:
+	var fitting := {"label": "Trunk cross", "capacity_m3_s": 1.6}
+	var sound := keep_clear if not keep_clear.is_empty() else ducts_ok()
+	var runs: Dictionary = {}   # duct id -> path, to skip spots sitting on another run
+	for item in objects:
+		if String(item.kind) == "duct": runs[String(item.id)] = DuctPorts.path(item.properties, objects)
+	var candidates: Array = []
+	for duct in ducts:
+		if not objects.has(duct): continue
+		var start: Dictionary = duct.properties.get("start_port", {})
+		var source := DuctPorts.resolve(start, objects)
+		if source.is_empty(): continue
+		var path := DuctPorts.path(duct.properties, objects)
+		for i in range(path.size() - 1):
+			var a: Vector3 = path[i]
+			var b: Vector3 = path[i + 1]
+			# Level runs in the ceiling plane, above the walls.
+			if absf(a.y - b.y) > 0.01 or a.y < DuctPorts.WALL_TOP + 0.55: continue
+			var length := a.distance_to(b)
+			var direction := (b - a) / maxf(length, 0.001)
+			var side := Vector3(-direction.z, 0, direction.x)
+			var t := 0.0
+			while t <= length + 0.01:
+				for aside in [2.0, -2.0, 2.5, -2.5, 3.0, -3.0]:
+					var point: Vector3 = a + direction * t + side * aside
+					var reach := Vector2(point.x - toward.x, point.z - toward.z).length()
+					var score := (point - (source.position as Vector3)).length() + 0.1 * reach if near_source else reach
+					candidates.append({"duct": duct, "point": point, "source": source.position, "score": score})
+				t += 1.0
+	candidates.sort_custom(func(p: Dictionary, q: Dictionary) -> bool: return float(p.score) < float(q.score))
+	var tried: Dictionary = {}
+	var attempts := 0
+	for candidate in candidates:
+		if attempts >= 24: break
+		var duct: Dictionary = candidate.duct
+		var point: Vector3 = candidate.point
+		# Inlet faces back toward the run's source, dominant axis first.
+		var back: Vector3 = (candidate.source as Vector3) - point
+		var facings: Array = [Vector3(signf(back.x), 0, 0), Vector3(0, 0, signf(back.z))]
+		if absf(back.z) > absf(back.x): facings.reverse()
+		for facing in facings:
+			if facing == Vector3.ZERO: continue
+			var rotation := atan2(facing.z, -facing.x)
+			var center := snap(point, "cross", fitting, rotation)
+			center.y = point.y - port_height("cross", fitting, "inlet")
+			var key := "%.2f,%.2f,%.2f,%.2f" % [center.x, center.y, center.z, rotation]
+			if tried.has(key) or excluded.any(func(at: Array) -> bool: return Vector3(float(at[0]), float(at[1]), float(at[2])).distance_to(center) < 0.5):
+				continue
+			tried[key] = true
+			if _overlaps_ceiling(center, footprint("cross", fitting), rotation) or _on_run(center + Vector3(0, port_height("cross", fitting, "inlet"), 0), runs, String(duct.id)):
+				continue
+			attempts += 1
+			var start: Dictionary = duct.properties.start_port
+			var finish: Dictionary = duct.properties.end_port
+			var upstream := _find(String(start.owner))
+			var downstream := _find(String(finish.owner))
+			_remove(duct)
+			var cross := _add("cross", center, rotation, fitting.duplicate())
+			var first := route(upstream, String(start.port), cross, "inlet")
+			var second := route(cross, "outlet", downstream, String(finish.port)) if not first.is_empty() else {}
+			if not second.is_empty() and cuts(sound).is_empty():
+				return {"cross": cross, "ducts": [first, second], "replaced": duct}
+			if not second.is_empty(): _drop(second)
+			if not first.is_empty(): _drop(first)
+			_drop(cross)
+			_unremove(duct)
+	return {}
+
+# A fitting centred at `point` would sit on one of `runs` (other than `own`).
+func _on_run(point: Vector3, runs: Dictionary, own: String) -> bool:
+	for id in runs:
+		if String(id) == own: continue
+		var path: Array = runs[id]
+		for i in range(path.size() - 1):
+			if Geometry3D.get_closest_point_to_segment(point, path[i], path[i + 1]).distance_to(point) < 1.6:
+				return true
+	return false
 
 # Deleting equipment takes its ducts along, and a tee or cross pulled out of
 # a main is bridged (upstream straight to downstream) so the rest keeps air.
@@ -486,7 +596,7 @@ func plan_removal(ids: Array) -> void:
 func reroute_attached(moved: Dictionary) -> void:
 	var old := _find(String(moved.id))
 	if old.is_empty(): return
-	var sound := _ducts_ok()
+	var sound := ducts_ok()
 	# A VAV's whole discharge (its tees and diffuser ducts) moves with it.
 	var diffusers: Array = []
 	if String(moved.kind) == "vav":
@@ -539,12 +649,29 @@ func reroute_attached(moved: Dictionary) -> void:
 			blocked.append(String(_find(String(finish.owner)).get("properties", {}).get("label", "a duct")))
 
 # Ids of ducts that are currently fine (to tell a move's damage from old damage).
-func _ducts_ok() -> Dictionary:
+func ducts_ok() -> Dictionary:
 	var result: Dictionary = {}
 	for item in objects:
 		if String(item.kind) == "duct" and DuctPorts.route_error(item.properties, objects, String(item.id)).is_empty():
 			result[String(item.id)] = true
 	return result
+
+# What the runs the plan cuts through feed (labels): ducts in `sound`, and
+# its own new ducts (a piece placed later in the plan can land on them).
+func cuts(sound: Dictionary) -> Array[String]:
+	var result: Array[String] = []
+	var planned: Dictionary = {}
+	for item in entries: planned[String(item.id)] = true
+	for item in objects:
+		var id := String(item.id)
+		if String(item.kind) != "duct" or not (sound.has(id) or planned.has(id)) or DuctPorts.route_error(item.properties, objects, id).is_empty():
+			continue
+		result.append(String(_find(String(item.properties.get("end_port", {}).get("owner", ""))).get("properties", {}).get("label", "a duct")))
+	return result
+
+# True unless the plan cuts through a run in keep_clear.
+func _clear() -> bool:
+	return keep_clear.is_empty() or cuts(keep_clear).is_empty()
 
 # Adds an already-built entry (a piece being placed) to the plan.
 func include(entry: Dictionary) -> void:
@@ -649,7 +776,7 @@ func zone_from(room: Dictionary, supply: Dictionary, supply_port: String, label:
 				else: center.x = (branch.position as Vector3).x
 				center.y = DuctPorts.ROUTE_HEIGHT - port_height("vav", properties, "inlet")
 				var inside := _inside_room(room, center, size, straight_rotation) if over_room else _indoors(center, size, straight_rotation)
-				if not inside or _overlaps_ceiling(center, footprint("vav", properties), straight_rotation):
+				if not inside or _overlaps_ceiling(center, footprint("vav", properties), straight_rotation) or _sits_on_run("vav", properties, center, straight_rotation):
 					continue
 				var placed := _place_vav(room, supply, supply_port, center, straight_rotation, properties, label)
 				if not placed.is_empty():
@@ -666,7 +793,7 @@ func zone_from(room: Dictionary, supply: Dictionary, supply_port: String, label:
 			var rotation := atan2(-facing.z, facing.x)
 			var point := snap(spot, "vav", properties, rotation)
 			point.y = DuctPorts.ROUTE_HEIGHT - port_height("vav", properties, "inlet")
-			if not _inside_room(room, point, size, rotation) or _overlaps_ceiling(point, footprint("vav", properties), rotation):
+			if not _inside_room(room, point, size, rotation) or _overlaps_ceiling(point, footprint("vav", properties), rotation) or _sits_on_run("vav", properties, point, rotation):
 				continue
 			var probe := _add("vav", point, rotation, properties.duplicate(true))
 			var run := route(supply, supply_port, probe, "inlet")
@@ -684,6 +811,7 @@ func zone_from(room: Dictionary, supply: Dictionary, supply_port: String, label:
 	return {}
 
 func _place_vav(room: Dictionary, supply: Dictionary, supply_port: String, point: Vector3, rotation: float, properties: Dictionary, label: String) -> Dictionary:
+	var mark := _mark()
 	var vav := _add("vav", point, rotation, properties.duplicate(true))
 	vav.properties.label = label
 	vav.properties.served_room = String(vav.id)
@@ -697,6 +825,11 @@ func _place_vav(room: Dictionary, supply: Dictionary, supply_port: String, point
 		_drop(vav)
 		return {}
 	thermostat(vav, room)
+	var cut := [] if keep_clear.is_empty() else cuts(keep_clear)
+	if not cut.is_empty():
+		_rollback(mark)
+		error = "A VAV there would cut through the duct to %s." % cut[0]
+		return {}
 	return vav
 
 # The whole unit hangs over this room (corners checked), so its air and its
@@ -754,7 +887,32 @@ func _distances(origin: Vector3, normal: Vector3, room: Dictionary, shortest: fl
 
 func _fits(kind: String, properties: Dictionary, point: Vector3, rotation: float, room: Dictionary) -> bool:
 	var size: Vector3 = library.size(kind, properties) if library != null else Vector3(2, 1, 2)
-	return _inside_room(room, point, size, rotation) and not _overlaps_ceiling(point, footprint(kind, properties), rotation)
+	return _inside_room(room, point, size, rotation) and not _overlaps_ceiling(point, footprint(kind, properties), rotation) and not _sits_on_run(kind, properties, point, rotation)
+
+# A `kind` piece at `center` would sit on a run in keep_clear (other than
+# `except`). Always false for the seeder, which keeps nothing clear.
+func _sits_on_run(kind: String, properties: Dictionary, center: Vector3, rotation: float, except: String = "") -> bool:
+	if keep_clear.is_empty() or library == null:
+		return false
+	if not is_same(_kept_for, keep_clear):
+		_kept_for = keep_clear
+		_kept_paths.clear()
+		var lookup: Dictionary = {}
+		for item in objects: lookup[String(item.id)] = item
+		for item in objects:
+			if keep_clear.has(String(item.id)): _kept_paths[String(item.id)] = DuctPorts.path(item.properties, objects, lookup)
+	var gone: Dictionary = {except: true}
+	for item in removed: gone[String(item.id)] = true
+	var size: Vector3 = library.size(kind, properties)
+	var body := AABB(Vector3(-size.x * 0.5, 0, -size.z * 0.5), size).grow(DuctGeometry.OUTER + 0.1)
+	var inverse := Transform3D(Basis(Vector3.UP, rotation), center).affine_inverse()
+	for id in _kept_paths:
+		if gone.has(id): continue
+		var path: Array = _kept_paths[id]
+		for i in range(path.size() - 1):
+			if body.intersects_segment(inverse * (path[i] as Vector3), inverse * (path[i + 1] as Vector3)) != null:
+				return true
+	return false
 
 # A diffuser whose side inlet faces back along `normal` to `port`, `distance`
 # metres (centre) downstream of it.

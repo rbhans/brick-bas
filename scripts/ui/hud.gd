@@ -453,8 +453,10 @@ func _room_editor(room: Dictionary) -> void:
 	UIKit.section(card_extra, "Room")
 	var line := UIKit.line(card_extra, "Room name")
 	line.text = String(room.label)
-	line.text_submitted.connect(func(text: String) -> void: game.rename_room(String(room.id), text); line.release_focus())
-	line.focus_exited.connect(func() -> void: game.rename_room(String(room.id), line.text))
+	# Deferred: renaming rebuilds this card, which mustn't happen while the
+	# field is still being removed from it (focus leaves when it's freed).
+	line.text_submitted.connect(func(text: String) -> void: game.rename_room.call_deferred(String(room.id), text); line.release_focus())
+	line.focus_exited.connect(func() -> void: game.rename_room.call_deferred(String(room.id), line.text))
 	var types := ["room", "office", "open_office", "conference", "classroom", "library", "lobby", "corridor", "break_room", "restroom", "storage", "mechanical", "gym", "workshop"]
 	var picker := UIKit.options(card_extra, types.map(func(value: String) -> String: return value.replace("_", " ").capitalize()))
 	picker.select(maxi(0, types.find(String(room.type))))
@@ -720,7 +722,8 @@ func _build_menu() -> void:
 		UIKit.button(backups, "Import backup", func() -> void: game.browser_files.choose()).size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_row(body, "New lot or starter", func() -> void: menu.hide(); game.end_job(); game.session_ui.show_starters())
 	job_menu_button = _row(body, "Career job board", func() -> void: menu.hide(); game.session_ui.show_career())
-	_row(body, "Title screen", func() -> void: menu.hide(); game.session_ui.show_home())
+	# The title screen has no way back into a job, so it leaves it (as a new lot does).
+	_row(body, "Title screen", func() -> void: menu.hide(); game.end_job(); game.session_ui.show_home())
 	_menu_section(body, "Simulation")
 	var day := UIKit.row(body, 10)
 	UIKit.label(day, "Day", ToySkin.SIZE_BODY, ToySkin.TEXT_2).custom_minimum_size.x = 64

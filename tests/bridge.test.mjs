@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { after, before, test } from 'node:test'
 import { WebSocket } from 'ws'
+import { BaskStreamClient } from '@basidekick/baskstream'
 import { PASSWORD, USER, startDemoStation } from '../tools/demo_station.mjs'
 
 process.env.BRICK_BAS_BRIDGE_TOKEN = 'test-token'
@@ -167,6 +168,29 @@ test('reconnects after the station drops the connection', async () => {
 	await new Promise((resolve) => setTimeout(resolve, 600))
 	assert.ok(client.pushes.some((frame) => frame.op === 'values'), 'live values resume after the reconnect')
 	client.socket.close()
+})
+
+test('a login that fails after the socket is up leaves no session behind', async () => {
+	await new Promise((resolve) => setTimeout(resolve, 300))
+	const sockets = station.state.sockets.size
+	const call = BaskStreamClient.prototype.call
+	BaskStreamClient.prototype.call = function (op, ...rest) {
+		if (op === 'capabilities') return Promise.reject(Object.assign(new Error('capabilities refused'), { code: 'forbidden' }))
+		return call.call(this, op, ...rest)
+	}
+	try {
+		const client = open()
+		await client.ready
+		await client.call('hello', { token: 'test-token' })
+		const reply = await client.call('connect', { station: station.url, username: USER, password: PASSWORD, allowSelfSigned: false })
+		assert.equal(reply.op, 'error', JSON.stringify(reply))
+		await new Promise((resolve) => setTimeout(resolve, 300))
+		// Left open, it would log in again by itself whenever the station dropped it.
+		assert.equal(station.state.sockets.size, sockets, 'the half-open station socket is closed')
+		client.socket.close()
+	} finally {
+		BaskStreamClient.prototype.call = call
+	}
 })
 
 test('starts as a program from a path with a space in it (and through a symlink)', async () => {

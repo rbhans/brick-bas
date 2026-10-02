@@ -76,7 +76,18 @@ func setup(owner: Node) -> void:
 	if not game.demo_only:
 		_connection_page()
 		game.data.changed.connect(refresh_connection)
+	game.selection_changed.connect(_follow_selection)
 	hide()
+
+# While open, the drawer works on whatever is selected in the game.
+func _follow_selection(id: String) -> void:
+	if not visible or id.is_empty() or id == target_id or game.model.find_object(id).is_empty():
+		return
+	target_id = id
+	if tabs.current_tab != 2: title.text = game.describe(id)
+	load_binding()
+	refresh()
+	if is_instance_valid(target_label): _refresh_target()
 
 func _page(name: String) -> VBoxContainer:
 	var scroll := ScrollContainer.new()
@@ -253,6 +264,8 @@ func _choose_point(index: int) -> void:
 	command_based.button_pressed = reference.text.contains("command") or reference.text.ends_with("_cmd")
 
 func _save_binding() -> void:
+	range_min.apply()
+	range_max.apply()
 	var levels := {}
 	for pair in enum_map.text.split(",", false):
 		var fields := pair.split("=")

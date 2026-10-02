@@ -167,7 +167,11 @@ func _handle(raw: String) -> void:
 			for entry in frame.get("points", []): _accept(entry)
 		"status":
 			var status := String(frame.get("status", ""))
-			if status == "reconnecting": state = "reconnecting"
+			if status == "reconnecting":
+				state = "reconnecting"
+				# Held readings aren't current while the station is away; the
+				# watch is restored on reconnect and sends fresh values.
+				_mark_stale()
 			elif status == "connected" and state == "reconnecting": state = "ready"
 			message = String(frame.get("message", "")) if frame.get("message") != null else ""
 
@@ -187,16 +191,19 @@ func _expire() -> void:
 		if callback.is_valid(): callback.call({"op": "error", "id": id, "code": "timeout", "message": "The bridge didn't answer in time."})
 		if String(entry.op) in ["hello", "connect"]: _fail("The station didn't answer in time.")
 
+# Last readings stay on screen but no longer count as current.
+func _mark_stale() -> void:
+	for id in points:
+		points[id] = points[id].duplicate()
+		points[id].quality_flags = ["stale"]
+
 func _fail(text: String) -> void:
 	if state == "error":
 		return
 	message = text
 	state = "error"
 	_password = ""
-	# Last readings stay on screen but no longer count as current.
-	for id in points:
-		points[id] = points[id].duplicate()
-		points[id].quality_flags = ["stale"]
+	_mark_stale()
 	# Detach the pending requests first: their callbacks may land back here.
 	var pending := _pending
 	_pending = {}

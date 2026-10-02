@@ -177,21 +177,34 @@ func _load(controls: Dictionary) -> void:
 	heat_sp.value = roundf(Units.fahrenheit(heat / count)) if count > 0 else 70.0
 
 func _apply() -> void:
+	# Buttons don't take focus, so a number still being typed hasn't been
+	# committed yet: commit it before reading.
+	for spin: SpinBox in [sat_fixed, static_fixed, vav_min, cool_sp, heat_sp]: spin.apply()
 	var controls := {
 		"occupied_start_h": start_pick.selected * 0.5, "occupied_end_h": (end_pick.selected + 1) * 0.5,
 		"optimal_start": optimal.button_pressed, "sat_reset": sat_reset.button_pressed, "sat_fixed_c": (sat_fixed.value - 32.0) / 1.8,
 		"static_reset": static_reset.button_pressed, "static_fixed_pa": static_fixed.value / Units.INWC_PER_PA,
 		"economizer": economizer.button_pressed, "dcv": dcv.button_pressed, "vav_min_fraction": vav_min.value / 100.0,
 	}
-	var cool := (cool_sp.value - 32.0) / 1.8
-	var heat := (minf(heat_sp.value, cool_sp.value - 2.0) - 32.0) / 1.8
+	# Every room gets the setpoints shown. A room already showing that whole
+	# °F value keeps its exact setpoint, so applying doesn't nudge it.
+	var cool_f := cool_sp.value
+	var heat_f := minf(heat_sp.value, cool_f - 2.0)
+	var setpoints := {}
+	for id in game.sim.zone_ids():
+		var zone: Dictionary = game.sim.zone_state(String(id))
+		var cool := float(zone.cool_setpoint_c)
+		var heat := float(zone.heat_setpoint_c)
+		if roundf(Units.fahrenheit(cool)) != cool_f: cool = (cool_f - 32.0) / 1.8
+		if roundf(Units.fahrenheit(heat)) != heat_f: heat = (heat_f - 32.0) / 1.8
+		setpoints[String(id)] = [cool, heat]
 	if game.job != null:
-		if not game.job.program(controls, cool, heat):
+		if not game.job.program(controls):
 			game.set_status("Stop the run to change the programming.")
 			return
 	else:
 		game.sim.set_controls(controls)
-		for id in game.sim.zone_ids(): game.sim.set_zone_setpoints(String(id), cool, heat)
+	for id: String in setpoints: game.sim.set_zone_setpoints(id, float(setpoints[id][0]), float(setpoints[id][1]))
 	game.points.apply_updates(game.data.provider.snapshot())
 	game.play_sound("save")
 	game.set_status("BAS programming applied · occupied %s–%s" % [CareerJobs.clock(float(controls.occupied_start_h)), CareerJobs.clock(float(controls.occupied_end_h))])

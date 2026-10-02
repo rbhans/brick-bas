@@ -162,17 +162,37 @@ func press(_mouse: Vector2) -> void:
 		game.play_sound("tick")
 		return
 	props.erase("error")
+	var message := "Connected %s to %s" % [game.describe(String(start_port.owner)) if not start_port.is_empty() else "open end", game.describe(String(hover_port.owner))]
+	_upstream_first(props)
 	props.bindings = Bindings.defaults("duct")
 	var result: Dictionary = game.apply("Duct run", [{"kind": "duct", "transform": {"position": [0, 0, 0], "rotation_y": 0.0}, "properties": props}])
 	game.flash(result.added)
 	game.play_sound("place")
-	game.set_status("Connected %s to %s" % [game.describe(String(props.start_port.owner)) if props.has("start_port") else "open end", game.describe(String(hover_port.owner))])
+	game.set_status(message)
 	anchor = Vector3.INF
 	waypoints.clear()
 	start_port.clear()
 	hover_port.clear()
 	clear_ghost()
 	_mark_sockets()
+
+# Runs are stored in the direction the air flows (start = upstream), so one
+# drawn from an inlet (or from open space to an outlet) is turned round.
+# Auto-routed runs come back from DuctConnections already in order.
+func _upstream_first(props: Dictionary) -> void:
+	if bool(props.get("auto_routed", false)):
+		return
+	if String(start_port.get("direction", "")) != "in" and not (start_port.is_empty() and String(hover_port.get("direction", "")) == "out"):
+		return
+	var points: Array = props.waypoints.duplicate()
+	points.reverse()
+	props.waypoints = points
+	var first: Dictionary = props.get("start_port", {})
+	var last: Dictionary = props.get("end_port", {})
+	props.erase("start_port")
+	props.erase("end_port")
+	if not last.is_empty(): props.start_port = last
+	if not first.is_empty(): props.end_port = first
 
 func key(event: InputEventKey) -> bool:
 	match event.physical_keycode:

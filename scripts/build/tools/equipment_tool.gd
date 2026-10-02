@@ -183,10 +183,20 @@ func press(_mouse: Vector2) -> void:
 	# Placing and ducting are one step (and one undo): the piece hooks onto
 	# the nearest free outlet, or taps the main with a trunk cross.
 	var planner := ZonePlanner.new(game.model.objects, game.index, game.model.new_id)
+	# Never on top of a working run (that would cut the air to what it feeds),
+	# unless tapping in replaces that very run; the fittings a tap adds keep
+	# clear of the rest.
+	var sound := planner.ducts_ok()
 	planner.include(entry)
+	planner.keep_clear = planner.ducts_ok()
 	var connected := kind in ["vav", "tee", "cross", "diffuser"] and planner.connect_inlet(entry)
 	if kind == "vav":
 		_feed_diffusers(planner, entry)
+	var cut := planner.cuts(sound)
+	if not cut.is_empty():
+		game.play_sound("error")
+		game.set_status("Can't put it there: it would sit on the duct to %s" % cut[0])
+		return
 	game.apply("Place " + label, planner.entries, planner.removed_ids())
 	game.flash([new_id])
 	game.play_sound("place")

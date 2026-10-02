@@ -49,6 +49,7 @@ var can_fade := RenderingServer.get_current_rendering_method() != "gl_compatibil
 # a batch per unit so each can fade on its own.
 var shared: BrickBatch
 var _unit_hidden: Dictionary = {}
+var _held: Dictionary = {}        # id -> true while a move tool carries it (stays hidden)
 var _signature := 0
 var _screen_timer := 0.0
 var _mode := 0
@@ -156,6 +157,10 @@ func rebuild(objects: Array) -> void:
 	if shared != null:
 		shared.build(self, "Equipment pieces")
 	_apply_mode_look()
+	# A piece still being carried stays hidden in the rebuilt scene.
+	for id in _held.keys():
+		if roots.has(id): set_hidden(String(id), true)
+		else: _held.erase(id)
 
 func _batch_unit(id: String, root: Node3D) -> void:
 	if shared != null:
@@ -598,7 +603,7 @@ func _apply_mode_look() -> void:
 func update_cutaway(state: Dictionary) -> void:
 	for id in roots:
 		var item: Dictionary = game.model.find_object(String(id))
-		if item.get("kind", "") != "tstat": continue
+		if item.get("kind", "") != "tstat" or _held.has(id): continue
 		var edge := String(item.properties.get("edge", ""))
 		if edge.is_empty(): continue
 		_show_unit(String(id), not BrickBatch.is_cut(BrickBatch.wall_custom(1, edge), int(state.mode), state.focus, state.forward, float(state.radius)))
@@ -631,6 +636,8 @@ func _overlay(node: Node, material: Material) -> void:
 		_overlay(child, material)
 
 func set_hidden(id: String, hidden: bool) -> void:
+	if hidden: _held[id] = true
+	else: _held.erase(id)
 	var root: Node3D = roots.get(id)
 	_show_unit(id, not hidden)
 	if is_instance_valid(root):
@@ -680,6 +687,13 @@ func rotate_object(id: String) -> bool:
 		return false
 	var tool := move_tool(id)
 	game.set_tool(tool)
+	# It turns where it stands: the ghost starts on the piece, not wherever
+	# the pointer happens to be (over the HUD, or nowhere yet).
+	var at := DuctPorts.vector(item.transform.position)
+	at.y = PlanGrid.FLOOR_TOP if String(item.kind) == "ahu" else CEILING_FACE
+	var camera: Camera3D = game.rig.camera
+	if not camera.is_position_behind(at):
+		tool.last_mouse = camera.unproject_position(at)
 	var event := InputEventKey.new()
 	event.physical_keycode = KEY_R
 	event.pressed = true

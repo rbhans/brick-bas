@@ -132,7 +132,7 @@ The HVAC occupied schedule is `occupied_start_h`–`occupied_end_h` (07:00–18:
 
 | Mode | When | Fan | OA damper | SAT setpoint | VAV setpoints / minimum |
 | --- | --- | --- | --- | --- | --- |
-| Occupied | 07:00–18:00 | on | minimum + DCV, economizer | T&R 12.8–18 °C, reset by OAT | occupied / 30 % (CO₂ reset to 60 %) |
+| Occupied | 07:00–18:00 | on | minimum + DCV, economizer | T&R 12.8–18 °C, reset by OAT | occupied / 30 % (CO₂ reset to 80 %) |
 | Cool-down | optimal start, zones warm | on | closed or economizer | 12.8 °C | occupied / 0 |
 | Warm-up | optimal start, zones cold | on | closed | 35 °C (AHU heating coil) | occupied / 0 |
 | Setup | unoccupied, a served zone > 29 °C | on | closed or economizer | 12.8 °C | cool to 27 / 0 |

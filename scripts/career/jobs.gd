@@ -96,7 +96,7 @@ const JOBS := [
 	{
 		"id": "t2_office_buildout", "tier": 2, "type": "install", "title": "Neighborhood office build-out",
 		"client": "Elm Street Properties", "template": "office", "scenario": "Hot afternoon",
-		"fee": 5200.0, "budget_factor": 1.3, "comfort_min": 82.0, "energy_usd": 19.0,
+		"fee": 5200.0, "budget_factor": 1.3, "comfort_min": 80.0, "energy_usd": 19.0,
 		"brief": "A ten-room office, plant room ready, no HVAC yet. The tenant moves in during a heat spell, so the system has to hold the rooms through a hot afternoon. Size the air handler with care.",
 		"hints": [
 			"Air handler size is on the workbench (Edit components). A unit too small runs flat out and still falls behind on a hot afternoon; too big costs more and wastes fan energy.",

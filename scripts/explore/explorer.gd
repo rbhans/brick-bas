@@ -116,6 +116,8 @@ func activate(on: bool) -> void:
 	active = on
 	player.visible = on
 	game.hud.hide_prompt()
+	# A thermostat opened in Build would otherwise take the wheel in Explore.
+	game.hud.hide_thermostat()
 	if on:
 		seated = {}
 		figure.sit(false)
@@ -129,7 +131,6 @@ func activate(on: bool) -> void:
 		game.set_hover("")
 	else:
 		game.set_hover("")
-		game.hud.hide_thermostat()
 
 func _on_ground_or_floor(point: Vector3) -> bool:
 	return point.y > -1.0 and point.length() < 1500.0
@@ -215,10 +216,15 @@ func _click(mouse: Vector2) -> void:
 	var id := String(hit.get("id", ""))
 	if id.is_empty():
 		return
+	# An air handler offers one entry per access door: use the one clicked.
+	var clicked: Dictionary = {}
 	for entry in interactables:
 		if String(entry.id) == id and _distance(entry) < REACH + 1.0:
-			_use(entry)
-			return
+			if clicked.is_empty() or hit.position.distance_to(entry.position) < hit.position.distance_to(clicked.position):
+				clicked = entry
+	if not clicked.is_empty():
+		_use(clicked)
+		return
 	game.select(id)
 
 func interact() -> void:
@@ -396,7 +402,7 @@ func _update_target() -> void:
 		if score < best_score:
 			best_score = score
 			best = entry
-	if String(best.get("id", "")) != String(target.get("id", "")) or String(best.get("kind", "")) != String(target.get("kind", "")):
+	if String(best.get("id", "")) != String(target.get("id", "")) or String(best.get("kind", "")) != String(target.get("kind", "")) or String(best.get("access_key", "")) != String(target.get("access_key", "")):
 		target = best
 		game.set_hover(String(target.get("id", "")))
 	if target.is_empty() or not seated.is_empty():
@@ -407,7 +413,7 @@ func _update_target() -> void:
 		detail = game.equipment.short_readout(String(target.id))
 	elif String(target.kind) == "tstat":
 		var info: Dictionary = game.thermostat_info(String(target.id))
-		if info.has("temp_c"): detail = "%s · set %s" % [Units.temp(float(info.temp_c), 1), Units.temp(float(info.setpoint_c))]
+		if info.has("temp_c") and is_finite(float(info.temp_c)) and is_finite(float(info.get("setpoint_c", NAN))): detail = "%s · set %s" % [Units.temp(float(info.temp_c), 1), Units.temp(float(info.setpoint_c))]
 	var anchor: Vector3 = target.position
 	# Ceiling equipment gets its prompt just below it, everything else beside it.
 	var lift := 0.4 if target.kind == "tstat" or (target.kind == "service" and anchor.y < 2.5 and anchor.y > 1.0) else (-0.4 if anchor.y > 3.0 else 0.9)

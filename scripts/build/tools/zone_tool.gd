@@ -54,6 +54,12 @@ func press(_mouse: Vector2) -> void:
 		game.play_sound("error")
 		game.set_status(planner.error)
 		return
+	# The planner keeps clear of working runs; never commit one that cuts any.
+	var cut := planner.cuts(planner.keep_clear)
+	if not cut.is_empty():
+		game.play_sound("error")
+		game.set_status("Can't zone %s that way: it would cut the duct to %s" % [String(room.label), cut[0]])
+		return
 	var result: Dictionary = game.apply("Zone %s" % String(room.label), planner.entries, planner.removed_ids())
 	game.clear_marks()
 	game.flash(result.added)

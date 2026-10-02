@@ -121,6 +121,12 @@ func connect_station(profile: Dictionary, password: String, test_only: bool = fa
 	if safe.station_url.is_empty() or safe.username.is_empty() or password.is_empty():
 		_announce("Connection details required", "Station address, username and password are needed.")
 		return false
+	# The address is saved with the build, so it mustn't carry a login.
+	var address: String = safe.station_url
+	if address.contains("://"): address = address.substr(address.find("://") + 3)
+	if address.get_slice("/", 0).contains("@"):
+		_announce("Remove the login from the address", "Put the username and password in their own fields, not in the station address.")
+		return false
 	busy = true
 	_announce("Starting the bridge", "Launching the local read-only bridge (Node.js).")
 	if not await _ensure_bridge():

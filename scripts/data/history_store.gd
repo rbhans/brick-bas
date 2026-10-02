@@ -12,8 +12,15 @@ const MAX_SAMPLES_PER_POINT := 1440
 var times: Dictionary = {}   # point id -> PackedFloat32Array
 var values: Dictionary = {}  # point id -> PackedFloat32Array
 var last_sample_time := -INF
+var _latest_time := -INF
+# Readings flagged like this aren't current: they trend as a gap.
+const NOT_CURRENT := ["stale", "fault", "down", "disabled", "communication_failure", "unknown"]
 
 func sample(points: Array[Dictionary], sim_time: float) -> bool:
+	# The clock went back (a reset, a new game, a verify run from midnight):
+	# the old samples would sit ahead of now and mix with the new ones.
+	if sim_time < _latest_time:
+		clear()
 	if sim_time - last_sample_time < SAMPLE_INTERVAL_S:
 		return false
 	last_sample_time = sim_time
@@ -26,6 +33,8 @@ func sample(points: Array[Dictionary], sim_time: float) -> bool:
 		if value is bool: number = 1.0 if value else 0.0
 		elif value is int or value is float: number = float(value)
 		else: continue
+		for flag in point.get("quality_flags", []):
+			if String(flag) in NOT_CURRENT: number = NAN
 		if not times.has(id):
 			times[id] = PackedFloat32Array()
 			values[id] = PackedFloat32Array()
@@ -36,6 +45,7 @@ func _push(id: String, time: float, value: float) -> void:
 	# Appending through the dictionary mutates in place (no copy-on-write).
 	times[id].append(time)
 	values[id].append(value)
+	_latest_time = maxf(_latest_time, time)
 	if times[id].size() > MAX_SAMPLES_PER_POINT + 120:
 		times[id] = times[id].slice(-MAX_SAMPLES_PER_POINT)
 		values[id] = values[id].slice(-MAX_SAMPLES_PER_POINT)
@@ -66,6 +76,7 @@ func clear() -> void:
 	times.clear()
 	values.clear()
 	last_sample_time = -INF
+	_latest_time = -INF
 
 # [{time, value, boundary}] oldest first; `since` limits the window.
 func get_series(point_id: String, since: float = -INF) -> Array:

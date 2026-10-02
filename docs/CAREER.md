@@ -24,7 +24,7 @@ Edits are locked during the run. Afterwards you either hand the building over or
 
 A running building with hidden faults that start during the morning, a work order, and a deadline. You travel there in time-lapse and then work live:
 
-- Read the BAS. Every card has its readout and trend, the alarm list shows alarms (damper not following command, high space temperature, filter ΔP, SAT high, fan failure), and B tints rooms by temperature. Rooms that stay out of 68–76.5 °F for 15 minutes phone in a comfort call.
+- Read the BAS. Every card has its readout and trend, the alarm list shows alarms (damper not following command, high space temperature, filter ΔP, SAT high, fan failure), and B tints rooms by temperature. Rooms that stay out of 68–76.5 °F (by more than about half a degree) for 15 minutes phone in a comfort call.
 - Walk to the equipment (Explore, or *Walk over* for two minutes of clock) and press E to service it.
 - **Tests** cost a few minutes and report what a tech would find: a stroke test on a damper or valve, a belt inspection, filter ΔP, a reference thermometer against the thermostat.
 - **Repairs** cost time and parts. The right part fixes the fault in the simulation. A part that fixes nothing comes out of your fee and loses the "no unnecessary parts" star.
@@ -72,7 +72,7 @@ Jobs aren't saved part-way. Leaving a job keeps the building as a sandbox.
 | 3 | Heat wave emergency | Service | School · hot afternoon | cooling valve, OA damper, classroom damper |
 | 3 | School energy audit | Tune-up | School · cold morning | as found ≈ $64/day; good ≈ $27 |
 | 3 | Maple Street Elementary | Install | School · normal | 15 rooms, two units |
-| 3 | The final inspection | Service | School · cold morning | four faults, one on a unit that fails mid-morning |
+| 3 | The final inspection | Service | School · cold morning | four faults, one on an air handler that fails just before you arrive |
 
 ## Adding or tuning a job
 

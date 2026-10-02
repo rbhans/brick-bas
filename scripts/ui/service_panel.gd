@@ -124,7 +124,7 @@ func refresh() -> void:
 	if work_box.visible:
 		work_label.text = "%s… %s" % [String(job.work.get("label", "Working")), game.sim.weather().clock]
 		work_bar.value = job.work_progress() * 100.0
-	var signature := "%s|%s|%s|%s" % [target_id, str(on_site), str(busy), str(info.checks)]
+	var signature := "%s|%s|%s|%s|%s" % [target_id, str(on_site), str(busy), str(info.checks), job.phase]
 	if signature == _signature:
 		return
 	_signature = signature

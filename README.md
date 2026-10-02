@@ -84,6 +84,7 @@ $godot --headless --path . --editor --import --quit
 $godot --headless --path . --script res://tests/run_tests.gd            # unit suite
 $godot --headless --path . --script res://tests/build_tools.gd          # build + HVAC tools via real input events
 $godot --headless --path . --script res://tests/explore_mode.gd         # starters seed connected HVAC; doors, seats, thermostats; overhead HVAC gives way steadily
+$godot --headless --path . --script res://tests/ui_checks.gd            # fields keep their keys, typed numbers apply, mode switches, access doors, time-lapse alarms
 $godot --headless --path . --script res://tests/browser_saves.gd        # save/import/migration
 $godot --headless --path . --script res://tests/simulation_fidelity.gd  # control sequences and physics
 $godot --headless --path . --script res://tests/geometry_overlaps.gd    # no coplanar bricks (z-fighting) in any starter

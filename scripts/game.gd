@@ -23,6 +23,7 @@ const SessionUI := preload("res://scripts/ui/session_ui.gd")
 const BrowserFiles := preload("res://scripts/ui/browser_files.gd")
 const EquipmentViewScript := preload("res://scripts/build/equipment_view.gd")
 const ExplorerScript := preload("res://scripts/explore/explorer.gd")
+const ALARM_CHUNK_STEPS := 10
 const TURBO_BUDGET_US := 9000 # simulation time per frame while time-lapsing...
 const TURBO_BUDGET_MAX_US := 50000 # ...growing with slow frames, so a slow machine still gets through the day
 const EDIT_GLYPHS := ["move", "rotate", "copy", "hammer", "build", "duct", "paint", "floor", "link"]
@@ -123,6 +124,10 @@ func _ready() -> void:
 	add_child(explorer)
 	explorer.setup(self)
 	_setup_sound()
+	# Before the HUD, so its menu shows the saved settings.
+	var preferences := Settings.load_all()
+	reduced_motion = bool(preferences.reduced_motion)
+	if DisplayServer.get_name() != "headless": sound_enabled = bool(preferences.sounds)
 	var layer := CanvasLayer.new()
 	add_child(layer)
 	hud = HUDScript.new()
@@ -136,9 +141,6 @@ func _ready() -> void:
 	session_ui.setup(self)
 	browser_files = BrowserFiles.new()
 	browser_files.setup(self)
-	var preferences := Settings.load_all()
-	reduced_motion = bool(preferences.reduced_motion)
-	if DisplayServer.get_name() != "headless": sound_enabled = bool(preferences.sounds)
 	set_graphics(String(preferences.graphics), false)
 	set_tool(SelectTool.new(self))
 	start_new_game("office", false)
@@ -187,6 +189,10 @@ func apply(label: String, adds: Array = [], removes: Array = [], updates: Array 
 func undo() -> void:
 	if _blocked("equipment"):
 		return
+	# A piece being carried is put back first: its record may be about to go.
+	var carried: Variant = tool.get("moving_id") if tool != null else null
+	if carried != null and not String(carried).is_empty():
+		finish_tool()
 	var command := commands.undo()
 	if command.is_empty():
 		set_status("Nothing to undo")
@@ -198,6 +204,9 @@ func undo() -> void:
 func redo() -> void:
 	if _blocked("equipment"):
 		return
+	var carried: Variant = tool.get("moving_id") if tool != null else null
+	if carried != null and not String(carried).is_empty():
+		finish_tool()
 	var command := commands.redo()
 	if command.is_empty():
 		set_status("Nothing to redo")
@@ -484,7 +493,9 @@ func placement_properties(kind: String, item_id: String, transform: Transform3D)
 	if kind == "tree" and not item_id.is_empty(): props.variant = item_id
 	var spec := placement.spec(kind, item_id)
 	if String(spec.mount) == "wall":
-		var found := placement._snap_wall(transform.origin + transform.basis.z * 0.4, kind, spec, "")
+		# Re-snap just off the wall line on the piece's side (it hangs half a stud
+		# out), so a piece by a room corner keeps its own wall, not the next one.
+		var found := placement._snap_wall(transform.origin - transform.basis.z * (PlanGrid.STUD * 0.5 - 0.05), kind, spec, "")
 		props.edge = String(found.get("edge", ""))
 		props.side = int(found.get("side", 1))
 	return props
@@ -569,8 +580,10 @@ func rotate_selected() -> void:
 			center.x = PlanGrid.snap_part_center(center.x, turned.x)
 			center.z = PlanGrid.snap_part_center(center.z, turned.y)
 			changed.transform.position = [center.x, center.y, center.z]
+			# Parking markings live on their own flat layer.
+			var layer: Dictionary = placement.surfaces if bool(spec.get("surface", false)) else placement.studs
 			for stud in Placement.footprint_studs(center, spec.footprint, changed.transform.rotation_y):
-				var owner := String(placement.studs.get(stud, ""))
+				var owner := String(layer.get(stud, ""))
 				if not owner.is_empty() and owner != selected_id:
 					set_status("No room to turn it · blocked by %s" % describe(owner))
 					play_sound("error")
@@ -628,9 +641,14 @@ func set_mode(value: int) -> void:
 	if value == Mode.EXPLORE and index.floors.is_empty() and model.objects_of(["floor"]).is_empty():
 		set_status("Lay some floor or build a room before exploring.")
 		play_sound("error")
+		hud.refresh_mode() # the clicked tab lit itself
 		return
 	var previous := mode
 	mode = value
+	# A drag that was under way when the mode changed never sees its release.
+	rig.orbiting = false
+	rig.panning = false
+	explorer.drag_button = MOUSE_BUTTON_NONE
 	if tool != null:
 		finish_tool()
 	if mode == Mode.EXPLORE:
@@ -732,12 +750,12 @@ func _process(delta: float) -> void:
 	var updates := data.provider.snapshot()
 	points.apply_updates(updates)
 	history.sample(updates, history_time())
-	if steps > 0:
-		alarms.evaluate(sim, float(steps) * DemoSimulation.STEP_SECONDS)
 	if job != null:
 		job.process(steps)
 	equipment.animate(delta)
 	_watch_frame_rate(delta)
+	# Keys typed into a field (a room name, a number box) mustn't pan the camera.
+	rig.pan_keys_enabled = not hud.typing() and not session_ui.visible
 	if tool != null and mode != Mode.EXPLORE:
 		tool.process(delta)
 	marks.process(delta)
@@ -761,18 +779,31 @@ func _advance_simulation(delta: float) -> int:
 	if not data.is_demo():
 		return 0
 	if turbo_until <= sim.sim_seconds:
-		return sim.advance(delta)
+		var due := sim.due_steps(delta)
+		var done := 0
+		while done < due:
+			var count := mini(ALARM_CHUNK_STEPS, due - done)
+			_run_steps(count)
+			done += count
+		return due
 	var started := Time.get_ticks_usec()
 	var budget := clampi(int(delta * 500000.0), TURBO_BUDGET_US, TURBO_BUDGET_MAX_US)
 	var remaining := int(ceil(turbo_until - sim.sim_seconds))
 	var steps := 0
 	while steps < remaining:
-		var chunk := mini(10, remaining - steps)
-		sim.run_steps(chunk)
+		var chunk := mini(ALARM_CHUNK_STEPS, remaining - steps)
+		_run_steps(chunk)
 		steps += chunk
 		if Time.get_ticks_usec() - started > budget:
 			break
 	return steps
+
+# Alarms judge their delays at this resolution: judged once per frame, a
+# time-lapse frame of hundreds of steps would credit its whole span to
+# whatever held at its end.
+func _run_steps(count: int) -> void:
+	sim.run_steps(count)
+	alarms.evaluate(sim, float(count) * DemoSimulation.STEP_SECONDS)
 
 # The clock trends run on: simulated seconds, or local wall-clock seconds
 # (so the hour grid reads true) when the data is live from a station.
@@ -1333,7 +1364,7 @@ func save_project() -> void:
 	if error == OK and OS.has_feature("web"): browser_files.saved()
 
 func load_project() -> bool:
-	end_job()
+	# A job only ends once a build has actually loaded (_adopt ends it).
 	var loaded := ProjectModel.new()
 	if not loaded.load_from(SAVE_PATH):
 		set_status("No saved build found.")

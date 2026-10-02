@@ -215,7 +215,6 @@ func _random_zoned_room(rng: RandomNumberGenerator) -> Dictionary:
 
 # Faults start at their onset (equipment fails during the morning, close to
 # when the call comes in), so a room isn't baked for hours before you arrive.
-# One can also fail while you're on site.
 func _apply_due_faults() -> void:
 	for fault in faults:
 		if bool(fault.applied) or sim().sim_seconds < float(fault.onset_s) - 0.5: continue

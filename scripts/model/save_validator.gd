@@ -4,12 +4,17 @@ const KINDS_V1 := ["floor", "wall", "wall_run", "door", "window", "ahu", "vav", 
 const KINDS := ["floor", "wall", "door", "window", "furniture", "ahu", "vav", "duct", "tee", "cross", "diffuser", "path", "parking", "tree", "shrub", "tstat"]
 const TEXT_KEYS := ["label", "served_room", "vav_id", "wall_id", "id", "role", "edge", "style", "finish", "item", "zone", "template", "room"]
 const ROLES := ["damper", "filter", "cooling_coil", "heating_coil", "fan"]
+# Everything sits on the lot (the build camera stops at ±400 m). Room
+# detection walks every cell between the outermost floors and walls, so a
+# piece far off the lot would make every edit crawl.
+const LOT_M := 450.0
+const LOT_TILES := 180
 
 static func number(value: Variant) -> bool:
 	return (value is int or value is float) and is_finite(float(value)) and absf(float(value)) < 1.0e12
 
 static func point(value: Variant) -> bool:
-	return value is Array and value.size() == 3 and value.all(func(v: Variant) -> bool: return number(v) and absf(float(v)) <= 100000)
+	return value is Array and value.size() == 3 and value.all(func(v: Variant) -> bool: return number(v) and absf(float(v)) <= LOT_M)
 
 static func records(value: Variant) -> bool:
 	return value is Array and value.size() <= 20000 and value.all(func(v: Variant) -> bool: return v is Dictionary)
@@ -43,9 +48,12 @@ static func plain(value: Variant, depth: int = 0) -> bool:
 static func property_shapes(props: Dictionary) -> bool:
 	for key in TEXT_KEYS:
 		if props.has(key) and not props[key] is String: return false
-	if props.has("edge") and not PlanGrid.is_edge_key(String(props.edge)): return false
+	if props.has("edge"):
+		var edge := PlanGrid.parse_edge(String(props.edge))
+		if edge.is_empty() or absi(int(edge.i)) > LOT_TILES or absi(int(edge.j)) > LOT_TILES: return false
 	if props.has("cell"):
 		if not props.cell is Array or props.cell.size() != 2 or not number(props.cell[0]) or not number(props.cell[1]): return false
+		if absf(float(props.cell[0])) > LOT_TILES or absf(float(props.cell[1])) > LOT_TILES: return false
 	for key in ["paint", "bindings", "components", "brick_connection", "openings", "opening_hosts", "start_port", "end_port"]:
 		if props.has(key) and not props[key] is Dictionary: return false
 	for key in ["segments", "waypoints"]:
@@ -107,6 +115,8 @@ static func _valid(data: Dictionary, version: int, kinds: Array) -> bool:
 	var site: Dictionary = data.get("site", {})
 	if site.has("spawn") and not point(site.spawn): return false
 	if not site.get("open_doors", {}) is Dictionary or not site.get("camera", {}) is Dictionary: return false
+	for state in site.get("open_doors", {}).values():
+		if not state is bool: return false
 	var camera: Dictionary = site.get("camera", {})
 	if camera.has("target") and not point(camera.target): return false
 	for key in ["pitch", "yaw", "distance"]:

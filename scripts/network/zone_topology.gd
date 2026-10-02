@@ -12,14 +12,12 @@ static func build(index: BuildingIndex, objects: Array, network: Dictionary) -> 
 	var zones: Dictionary = {}
 	for room in index.rooms:
 		var windows := {"N": 0.0, "E": 0.0, "S": 0.0, "W": 0.0}
-		var glazing := 0.0
 		for window in room.windows:
 			if not bool(window.exterior):
 				continue
 			var tall := String(window.style) in ["tall_window", "storefront"]
 			var area := TALL_WINDOW_AREA if tall else WINDOW_AREA
 			windows[facing(window.outward)] += area
-			glazing += area
 		var exterior_doors := 0
 		for door in room.doors:
 			if String(door.to) == "outside": exterior_doors += 1
@@ -28,7 +26,8 @@ static func build(index: BuildingIndex, objects: Array, network: Dictionary) -> 
 			neighbours[other] = float(room.neighbours[other]) * PlanGrid.TILE * PlanGrid.WALL_HEIGHT
 		zones[String(room.id)] = {
 			"label": String(room.label), "type": String(room.type), "area_m2": float(room.area_m2),
-			"exterior_wall_m2": maxf(0.0, room.exterior_edges.size() * PlanGrid.TILE * PlanGrid.WALL_HEIGHT - glazing),
+			# Gross: the simulation takes the windows out itself.
+			"exterior_wall_m2": room.exterior_edges.size() * PlanGrid.TILE * PlanGrid.WALL_HEIGHT,
 			"roof_m2": float(room.area_m2), "window_m2": windows, "neighbours": neighbours, "exterior_doors": exterior_doors,
 		}
 	var terminals: Dictionary = {}

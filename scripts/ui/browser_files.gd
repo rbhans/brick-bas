@@ -25,15 +25,18 @@ func receive_file(arguments: Array) -> void:
 	app.import_browser_save.call_deferred(String(arguments[0]))
 
 func download() -> void:
+	if app.job != null:
+		app.set_status("Career jobs aren't saved part-way: finish the job, or leave it from the job panel.")
+		return
 	app.capture_save_state()
-	JavaScriptBridge.download_buffer(JSON.stringify(app.project_model.to_dictionary(), "  ").to_utf8_buffer(), "brick-bas-build.json", "application/json")
-	app.status_label.text = "Backup downloaded · keep it to restore or move this build"
+	JavaScriptBridge.download_buffer(JSON.stringify(app.model.to_dictionary(), "  ").to_utf8_buffer(), "brick-bas-build.json", "application/json")
+	app.set_status("Backup downloaded · keep it to restore or move this build")
 
 func saved() -> void:
 	JavaScriptBridge.force_fs_sync()
 	if OS.is_userfs_persistent():
-		app.status_label.text = "Saved in this browser · download a backup before clearing site data"
+		app.set_status("Saved in this browser · download a backup before clearing site data")
 		if browser != null: browser.requestPersistence()
 	else:
-		app.status_label.text = "Temporary save only · browser storage unavailable · download a backup"
-		if browser != null: browser.warn(app.status_label.text)
+		app.set_status("Temporary save only · browser storage unavailable · download a backup")
+		if browser != null: browser.warn(app.status_text)

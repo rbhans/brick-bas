@@ -213,6 +213,10 @@ func _confirm_close() -> void:
 		job.close_out()
 
 func _confirm_leave() -> void:
+	if game.job != null and game.job.phase == "done":
+		game.end_job() # already graded and paid: nothing to lose
+		game.session_ui.show_career()
+		return
 	_confirm("Leave this job? You keep the building to look around, but the job won't count.", func() -> void: game.end_job(); game.session_ui.show_career())
 
 func _confirm(text: String, then: Callable) -> void:
